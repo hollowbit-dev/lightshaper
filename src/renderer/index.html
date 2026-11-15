@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' ls:; img-src 'self' ls: data: blob:; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ls:">
+<title>Lightshaper</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wash"></div>
+
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><span>Lightshaper</span><a class="studio-link" href="https://hollowbit.dev/">by Hollowbit</a></div>
+  <nav class="seg" id="modes">
+    <button data-mode="library" class="on">Library</button>
+    <button data-mode="edit" id="editTab" disabled>Edit</button>
+    <span class="seg-pill"></span>
+  </nav>
+  <div class="top-r">
+    <button class="icon-btn" id="gear" title="Settings" aria-label="Settings"><svg viewBox="0 0 20 20" width="17" height="17"><path fill="currentColor" d="M10 6.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm0 5.2a1.8 1.8 0 1 1 0-3.6 1.8 1.8 0 0 1 0 3.6Zm7.2-3.1-1.5-.3a6 6 0 0 0-.5-1.2l.9-1.3a.8.8 0 0 0-.1-1l-1-1a.8.8 0 0 0-1-.1l-1.3.9a6 6 0 0 0-1.2-.5l-.3-1.5a.8.8 0 0 0-.8-.7H8.6a.8.8 0 0 0-.8.7l-.3 1.5a6 6 0 0 0-1.2.5L5 3.4a.8.8 0 0 0-1 .1l-1 1a.8.8 0 0 0-.1 1l.9 1.3a6 6 0 0 0-.5 1.2l-1.5.3a.8.8 0 0 0-.7.8v1.4c0 .4.3.7.7.8l1.5.3c.1.4.3.8.5 1.2l-.9 1.3a.8.8 0 0 0 .1 1l1 1c.3.3.7.3 1 .1l1.3-.9c.4.2.8.4 1.2.5l.3 1.5c.1.4.4.7.8.7h1.4c.4 0 .7-.3.8-.7l.3-1.5c.4-.1.8-.3 1.2-.5l1.3.9c.3.2.7.2 1-.1l1-1c.3-.3.3-.7.1-1l-.9-1.3c.2-.4.4-.8.5-1.2l1.5-.3c.4-.1.7-.4.7-.8V9.5a.8.8 0 0 0-.7-.8Z"/></svg></button>
+    <button class="primary sm" id="exportBtn" disabled>Export</button>
+  </div>
+</header>
+
+<main class="views">
+  <!-- LIBRARY -->
+  <section class="view on" id="library">
+    <aside class="side">
+      <div class="side-h">Folders</div>
+      <div id="folders" class="folders"></div>
+      <button class="add-folder" id="addFolder"><span>+</span> Add a folder</button>
+      <div class="side-note"><svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M8 1 2.5 3v4.2c0 3.4 2.3 6.4 5.5 7.8 3.2-1.4 5.5-4.4 5.5-7.8V3L8 1Zm-1 10L4.5 8.5l1-1L7 9l3.5-3.5 1 1L7 11Z"/></svg> Your originals are never changed. Edits are kept by Lightshaper and saved as new copies when you export.</div>
+    </aside>
+    <div class="lib-main">
+      <div class="lib-bar" id="libBar" hidden>
+        <div class="lib-title"><b id="folderName"></b><span class="muted" id="photoCount"></span></div>
+        <div class="lib-actions" id="selActions">
+          <span class="sel-count" id="selCount"></span>
+          <button class="ghost sm" id="copyEdits" title="Copy edits (⌘C)">Copy edits</button>
+          <button class="ghost sm" id="pasteEdits" title="Paste edits (⌘V)" disabled>Paste edits</button>
+          <div class="menu-wrap"><button class="ghost sm" id="lookMenuBtn">Apply look ▾</button><div class="menu" id="lookMenu" hidden></div></div>
+          <button class="ghost sm" id="resetSel">Reset</button>
+        </div>
+        <input type="range" class="size" id="thumbSize" min="120" max="320" value="190" aria-label="Thumbnail size">
+      </div>
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="empty">
+        <div class="drop">
+          <div class="drop-art" aria-hidden="true"><i></i><i></i><i></i></div>
+          <h1>Edit your photos, beautifully. For free.</h1>
+          <p>Open a folder of photos (JPEG, PNG, HEIC or camera RAW) to get started. Or drop a folder here.</p>
+          <button class="primary lg" id="openFirst">Open a folder</button>
+          <div class="promises"><span>No account</span><span>Works offline</span><span>Originals never changed</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EDIT -->
+  <section class="view" id="edit">
+    <div class="work">
+      <div class="stage" id="stage">
+        <canvas id="view"></canvas>
+        <img id="placeholder" alt="" hidden>
+        <div class="crop-layer" id="cropLayer" hidden>
+          <div class="crop-box" id="cropBox">
+            <i class="grid3"></i>
+            <b data-h="nw"></b><b data-h="n"></b><b data-h="ne"></b><b data-h="e"></b><b data-h="se"></b><b data-h="s"></b><b data-h="sw"></b><b data-h="w"></b>
+          </div>
+        </div>
+        <div class="busy" id="busy" hidden><span class="spin"></span><span id="busyText">Developing…</span></div>
+        <div class="error-card" id="errorCard" hidden></div>
+        <div class="ba-tag" id="baTag" hidden>Before</div>
+        <div class="zoom-tag" id="zoomTag" hidden></div>
+      </div>
+      <div class="toolbar">
+        <div class="tb-l">
+          <button class="tb" id="prevBtn" title="Previous (←)"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M10.5 2.5 5 8l5.5 5.5-1 1L3 8l6.5-6.5z"/></svg></button>
+          <button class="tb" id="nextBtn" title="Next (→)"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M5.5 2.5 11 8l-5.5 5.5 1 1L13 8 6.5 1.5z"/></svg></button>
+          <span class="tb-name" id="photoName"></span>
+        </div>
+        <div class="tb-c">
+          <button class="tb" id="undoBtn" title="Undo (⌘Z)"><svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M5.3 3.3 6.4 4.4 4.8 6H10a4 4 0 1 1 0 8H7v-1.5h3a2.5 2.5 0 0 0 0-5H4.8l1.6 1.6-1.1 1.1L1.8 6.8z"/></svg></button>
+          <button class="tb" id="redoBtn" title="Redo (⇧⌘Z)"><svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="m10.7 3.3-1.1 1.1L11.2 6H6a4 4 0 1 0 0 8h3v-1.5H6a2.5 2.5 0 0 1 0-5h5.2L9.6 9.1l1.1 1.1 3.5-3.4z"/></svg></button>
+          <span class="tb-sep"></span>
+          <button class="tb wide" id="baBtn" title="Hold to compare with the original (\)">Before / after</button>
+          <button class="tb wide" id="cropBtn" title="Crop and straighten (C)"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M4 1h1.5v9.5H15V12h-3v3h-1.5v-3H4V5H1V3.5h3zm2.5 2.5H12V9h-1.5V5H6.5z"/></svg> Crop</button>
+          <button class="tb wide" id="zoomBtn" title="Zoom to 100% (Z)">Fit</button>
+        </div>
+        <div class="tb-r"><button class="ghost sm" id="resetBtn">Reset</button></div>
+      </div>
+      <div class="strip" id="strip"></div>
+    </div>
+
+    <aside class="panel" id="panel">
+      <div class="hist-wrap"><canvas id="hist" width="560" height="150"></canvas><div class="meta" id="meta"></div></div>
+      <div class="panel-scroll" id="panelScroll">
+        <section class="grp" id="looksGrp">
+          <h3><button class="grp-h" data-g="looks">Looks</button></h3>
+          <div class="looks" id="looks"></div>
+          <button class="save-look" id="saveLook">Save current edits as a look</button>
+        </section>
+        <div id="groups"></div>
+        <section class="grp closed" data-grp="mixer">
+          <h3><button class="grp-h">Colour mixer</button></h3>
+          <div class="grp-b">
+            <div class="mini-seg" id="mixerSeg"><button data-m="h" class="on">Hue</button><button data-m="s">Saturation</button><button data-m="l">Brightness</button></div>
+            <div id="mixer"></div>
+          </div>
+        </section>
+        <section class="grp closed" data-grp="grade">
+          <h3><button class="grp-h">Colour grading</button></h3>
+          <div class="grp-b" id="grade"></div>
+        </section>
+        <section class="grp" data-grp="crop" id="cropGrp" hidden>
+          <h3><button class="grp-h">Crop</button></h3>
+          <div class="grp-b">
+            <div class="aspects" id="aspects"></div>
+            <div id="straighten"></div>
+            <div class="crop-actions">
+              <button class="ghost sm" id="rotL" title="Turn left">⟲ Turn</button>
+              <button class="ghost sm" id="rotR" title="Turn right">⟳ Turn</button>
+              <button class="ghost sm" id="flipH" title="Flip">⇋ Flip</button>
+              <button class="ghost sm" id="cropReset">Reset</button>
+            </div>
+            <button class="primary sm full" id="cropDone">Done</button>
+          </div>
+        </section>
+      </div>
+    </aside>
+  </section>
+</main>
+
+<!-- export -->
+<div class="sheet-bg" id="exportSheet" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="exTitle">
+    <h2 id="exTitle">Export</h2>
+    <p class="muted" id="exSub"></p>
+    <label class="row"><span>Format</span>
+      <div class="mini-seg" id="exFormat"><button data-v="jpg" class="on">JPEG</button><button data-v="png">PNG</button><button data-v="webp">WebP</button></div></label>
+    <label class="row" id="exQualityRow"><span>Quality</span><input type="range" id="exQuality" min="50" max="100" value="92"><b class="num" id="exQualityV">92</b></label>
+    <label class="row"><span>Size</span>
+      <div class="mini-seg" id="exSize"><button data-v="0" class="on">Full</button><button data-v="4096">4096</button><button data-v="2048">2048</button><button data-v="1080">1080</button></div></label>
+    <label class="row"><span>Save to</span>
+      <div class="where"><div class="mini-seg" id="exWhere"><button data-v=":beside" class="on">Beside the originals</button><button data-v="pick">Choose…</button></div><small class="muted" id="exWhereNote">In a new “Lightshaper edits” folder</small></div></label>
+    <div class="progress" id="exProgress" hidden><i></i></div>
+    <div class="sheet-actions"><button class="ghost" id="exCancel">Cancel</button><button class="primary" id="exGo">Export</button></div>
+  </div>
+</div>
+
+<!-- settings -->
+<div class="sheet-bg" id="settingsSheet" hidden>
+  <div class="sheet small" role="dialog">
+    <h2>Lightshaper</h2>
+    <p class="muted" id="versionLine"></p>
+    <label class="switch-row"><span>Check for updates once a day<small class="muted">Only asks GitHub for the latest version number. Nothing about you or your photos is sent.</small></span><input type="checkbox" id="autoUpdate"></label>
+    <div class="sheet-actions"><button class="ghost" id="checkNow">Check now</button><button class="primary" id="settingsDone">Done</button></div>
+    <p class="fine">Free and open source. Made by <a href="https://hollowbit.dev/">Hollowbit Studio</a>. RAW decoding by LibRaw.</p>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<div class="update" id="updateBar" hidden></div>
+<div class="dropping" id="dropping" hidden><div>Drop to open</div></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

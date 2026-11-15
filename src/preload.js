@@ -1,0 +1,21 @@
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+
+contextBridge.exposeInMainWorld('ls', {
+  platform: process.platform,
+  folders: () => ipcRenderer.invoke('folders'),
+  addFolder: (p) => ipcRenderer.invoke('add-folder', p),
+  removeFolder: (p) => ipcRenderer.invoke('remove-folder', p),
+  list: (dir) => ipcRenderer.invoke('list', dir),
+  reveal: (id) => ipcRenderer.invoke('reveal', id),
+  getEdit: (id) => ipcRenderer.invoke('get-edit', id),
+  saveEdit: (id, s, thumb) => ipcRenderer.invoke('save-edit', id, s, thumb),
+  pickExportFolder: () => ipcRenderer.invoke('pick-export-folder'),
+  exportWrite: (id, dir, ext, bytes) => ipcRenderer.invoke('export-write', id, dir, ext, bytes),
+  showExport: (p) => ipcRenderer.invoke('show-export', p),
+  pathOf: (file) => webUtils.getPathForFile(file),
+  settings: () => ipcRenderer.invoke('settings'),
+  setSettings: (p) => ipcRenderer.invoke('set-settings', p),
+  checkUpdates: () => ipcRenderer.invoke('check-updates'),
+  openUpdate: (u) => ipcRenderer.invoke('open-update', u),
+  onUpdate: (fn) => ipcRenderer.on('update', (_, s) => fn(s)),
+});

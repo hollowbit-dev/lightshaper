@@ -1,0 +1,53 @@
+{
+  "name": "lightshaper",
+  "productName": "Lightshaper",
+  "version": "0.1.0",
+  "description": "A free, offline photo editor. Sliders, looks, crop, RAW files and batch export. Your originals are never changed. For Mac and Windows.",
+  "main": "src/main.js",
+  "private": true,
+  "author": "Hollowbit Studio",
+  "license": "MIT",
+  "homepage": "https://hollowbit.dev/lightshaper/",
+  "repository": "github:hollowbit-dev/lightshaper",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/engine.mjs && node test/shots.mjs",
+    "icon": "swift scripts/make-icon.swift assets/icon.png && sips -z 1024 1024 assets/icon.png",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist": "electron-builder --mac --win --publish never"
+  },
+  "dependencies": {
+    "libraw-wasm": "1.6.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "playwright": "1.48"
+  },
+  "build": {
+    "appId": "dev.hollowbit.lightshaper",
+    "productName": "Lightshaper",
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "assets/icon.png", "package.json", "node_modules/libraw-wasm/dist/**/*", "node_modules/libraw-wasm/package.json"],
+    "asarUnpack": ["node_modules/libraw-wasm/dist/**/*"],
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "category": "public.app-category.photography",
+      "icon": "assets/icon.png",
+      "identity": null,
+      "artifactName": "Lightshaper-${version}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "assets/icon.png",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Lightshaper-Setup-${version}-win-x64.exe"
+    },
+    "afterPack": "scripts/after-pack.js"
+  }
+}
