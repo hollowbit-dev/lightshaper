@@ -37,52 +37,53 @@ export function measure(px) {
   return { pct, chroma: C / n, a: ca ? ca[0] : 0, b: ca ? ca[1] : 0, hasCast: !!ca, sh: avg(sh), hi: avg(hi) };
 }
 
-// Builds settings for `cur` (keeps its crop and masks) so its render matches `ref` stats.
-// `render(s)` returns small RGBA pixels of the photo with settings s.
+// Builds settings for `cur` (keeps its crop and masks) so its render matches the reference.
+// `render(s)` returns small RGBA pixels of this photo with settings s.
+// Used for reference photos that were not edited in Lightshaper (those just lend their settings).
 export function matchSettings(render, cur, ref) {
   const s = S.complete({ geom: cur.geom, masks: cur.masks });
   if (ref.chroma < .012) s.bw = true;
-  // 1. Brightness: a tone curve that maps this photo's brightness spread onto the reference's.
   const src = measure(render(s));
-  const pts = [[0, 0]];
-  for (let i = 0; i < PCT.length; i++) {
-    const x = src.pct[i], y = ref.pct[i];
-    if (x > pts[pts.length - 1][0] + .04 && x < .97) pts.push([x, Math.max(pts[pts.length - 1][1], Math.min(1, y))]);
+  const T = ref;
+  // 1. Brightness: a tone curve that follows the reference's midtones (70%). The ends stay put unless
+  // the reference is clearly faded or dim, because a photo's full range depends on its scene.
+  const pts = [];
+  {
+    const lo = ref.pct[0] > .12 ? Math.min(.15, (ref.pct[0] - .06) * .7) : 0;
+    const hi = ref.pct[6] < .82 ? Math.max(.8, ref.pct[6] + .06) : 1;
+    pts.push([0, round(lo)]);
+    for (const i of [2, 3, 4]) { const x = src.pct[i], y = x + (ref.pct[i] - x) * .7; if (x > pts[pts.length - 1][0] + .06 && x < .94) pts.push([x, Math.max(pts[pts.length - 1][1] + .02, Math.min(.98, y))]); }
+    pts.push([1, Math.max(pts[pts.length - 1][1] + .02, hi)]);
   }
-  pts.push([1, Math.max(pts[pts.length - 1][1], ref.pct[PCT.length - 1] > .9 ? 1 : Math.min(1, ref.pct[PCT.length - 1] + .06))]);
   s.curve = { ...s.curve, m: pts.map(([x, y]) => [round(x), round(y)]) };
   if (s.bw) return s;
-  // 2. Overall colour cast: find the temperature and tint that move the average colour to the reference's.
-  const base = measure(render(s));
+  // 2. Overall colour cast: temperature first (limited), then tint for what is left.
+  const lim = .3;
+  const b0 = measure(render(s));
   const dT = measure(render({ ...s, temp: .3 })), dN = measure(render({ ...s, tint: .3 }));
-  const ta = (dT.a - base.a) / .3, tb = (dT.b - base.b) / .3, na = (dN.a - base.a) / .3, nb = (dN.b - base.b) / .3;
-  const ea = ref.a - base.a, eb = ref.b - base.b, det = ta * nb - tb * na;
-  if (ref.hasCast && base.hasCast && Math.abs(det) > 1e-6) {
-    // Temperature first (limited), then tint for whatever cast is left, so neither overshoots.
-    const t = clamp((ea * nb - eb * na) / det, -.5, .5);
+  const ta = (dT.a - b0.a) / .3, tb = (dT.b - b0.b) / .3, na = (dN.a - b0.a) / .3, nb = (dN.b - b0.b) / .3;
+  const ea = T.a - b0.a, eb = T.b - b0.b, det = ta * nb - tb * na;
+  if (T.hasCast && b0.hasCast && Math.abs(det) > 1e-6) {
+    const t = clamp((ea * nb - eb * na) / det, -lim, lim);
     const ra = ea - t * ta, rb = eb - t * tb;
-    const n = clamp((ra * na + rb * nb) / Math.max(1e-9, na * na + nb * nb), -.12, .12);
-    s.temp = t; s.tint = n;
+    s.temp = t; s.tint = clamp((ra * na + rb * nb) / Math.max(1e-9, na * na + nb * nb), -.12, .12);
   }
   // 3. Colourfulness.
   const now = measure(render(s));
-  if (now.chroma > .003) s.saturation = clamp(ref.chroma / now.chroma - 1, -.85, .7);
-  // 4. Colour in the shadows and highlights (split toning), what's left after the overall cast.
+  if (now.chroma > .003) s.saturation = clamp((T.chroma / now.chroma - 1) * .6, -.35, .45);
+  // 4. Colour in the shadows and highlights (split toning): what is left after the overall cast.
   const after = measure(render(s));
-  // If the light itself is very different (temperature at its limit), toning would only fight it.
-  const farOff = Math.abs(s.temp) >= .5;
+  const farOff = Math.abs(s.temp) >= lim;
   for (const [key, zone] of farOff ? [] : [['gradeSh', 'sh'], ['gradeHi', 'hi']]) {
-    if (!ref[zone] || !after[zone]) continue;
-    const da = ref[zone][0] - after[zone][0], db = ref[zone][1] - after[zone][1];
+    if (!T[zone] || !after[zone]) continue;
+    const da = T[zone][0] - after[zone][0], db = T[zone][1] - after[zone][1];
     const mag = Math.hypot(da, db);
-    if (mag < .012) continue;
-    // Which hue on our grading wheel moves colour in this direction? Try them and keep the best.
+    if (mag < .01) continue;
     let best = null;
     for (let h = 0; h < 360; h += 15) {
       const m = measure(render({ ...s, [key]: { h, s: .4 } }));
       if (!m[zone]) continue;
-      const ma = m[zone][0] - after[zone][0], mb = m[zone][1] - after[zone][1];
-      const along = (ma * da + mb * db) / mag; // progress toward the target per 0.4 amount
+      const along = ((m[zone][0] - after[zone][0]) * da + (m[zone][1] - after[zone][1]) * db) / mag;
       if (!best || along > best.along) best = { h, along };
     }
     if (best && best.along > 1e-4) s[key] = { h: best.h, s: round(clamp(.4 * mag / best.along * .7, 0, .35)) };
@@ -91,13 +92,14 @@ export function matchSettings(render, cur, ref) {
   return s;
 }
 
-// Mixes between no change (0) and the full match (1).
+// Mixes between no change (0) and the full match (1), for every slider.
 export function blend(cur, full, k) {
-  const s = S.clone(full);
-  const fresh = S.fresh();
-  for (const key of ['temp', 'tint', 'saturation']) s[key] = round(fresh[key] + (full[key] - fresh[key]) * k);
+  const fresh = S.fresh(), s = S.clone(full);
+  for (const [key, v] of Object.entries(fresh)) if (typeof v === 'number') s[key] = round(v + (full[key] - v) * k);
   for (const key of ['gradeSh', 'gradeHi']) s[key] = { h: full[key].h, s: round(full[key].s * k) };
-  s.curve = { ...full.curve, m: full.curve.m.map(([x, y]) => [x, round(x + (y - x) * k)]) };
+  s.hsl = full.hsl.map((b) => ({ h: round(b.h * k), s: round(b.s * k), l: round(b.l * k) }));
+  for (const c of ['m', 'r', 'g', 'b']) s.curve[c] = full.curve[c].map(([x, y]) => [x, round(x + (y - x) * k)]);
+  s.bw = k > .5 && full.bw;
   s.geom = S.clone(cur.geom); s.masks = S.clone(cur.masks || []);
   return s;
 }

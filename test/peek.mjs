@@ -1,0 +1,11 @@
+import { _electron as electron } from 'playwright';
+import fs from 'fs'; import path from 'path'; import os from 'os';
+const root = path.resolve(import.meta.dirname, '..');
+const app = await electron.launch({ args: [root], env: { ...process.env, LIGHTSHAPER_USERDATA: fs.mkdtempSync(path.join(os.tmpdir(), 'ls-pk-')) } });
+const page = await app.firstWindow();
+await page.evaluate((d) => window.ls.addFolder(d), path.join(root, process.argv[2]));
+await page.evaluate(() => location.reload());
+await page.waitForSelector('#grid .tile img.ok', { timeout: 30000 });
+await page.waitForTimeout(4000);
+await page.screenshot({ path: 'test/out/peek.png' });
+await app.close();

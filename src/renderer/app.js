@@ -1240,13 +1240,21 @@ $('#matchFile').onclick = async () => { const p = await api.pickImage(); if (p) 
 async function runMatch(ref, btn) {
   if (btn) btn.insertAdjacentHTML('beforeend', '<span class="busy-dot"><span class="spin"></span></span>');
   try {
-    const src = await decode(ref, { half: true });
-    worker.load(src); if (src.ref) { worker.calibrate(src.ref); src.ref.close(); } if (src.bitmap) src.bitmap.close();
-    const plain = S.fresh();
-    const [rw, rh] = fit(...worker.outSize(plain), 200);
-    const refStats = measure(worker.pixels(plain, rw, rh, { noSharp: true }));
-    const [w, h] = fit(...engine.outSize(st.s), 160);
-    const full = matchSettings((x) => engine.pixels(x, w, h, { noSharp: true, noMasks: true }), st.s, refStats);
+    let full;
+    const saved = st.byId.has(ref.id) ? await api.getEdit(ref.id) : null;
+    if (saved) {
+      // Edited here: its look is known exactly, so lend its settings (not its crop, masks or exposure).
+      full = { ...S.complete(saved), exposure: 0, geom: S.clone(st.s.geom), masks: S.clone(st.s.masks || []) };
+    } else {
+      // Any other photo: measure it and set ordinary sliders to match.
+      const src = await decode(ref, { half: true });
+      worker.load(src); if (src.ref) { worker.calibrate(src.ref); src.ref.close(); } if (src.bitmap) src.bitmap.close();
+      const plain = S.fresh();
+      const [rw, rh] = fit(...worker.outSize(plain), 200);
+      const refStats = measure(worker.pixels(plain, rw, rh, { noSharp: true }));
+      const [w, h] = fit(...engine.outSize(st.s), 160);
+      full = matchSettings((x) => engine.pixels(x, w, h, { noSharp: true, noMasks: true }), st.s, refStats);
+    }
     full.look = 'match';
     const thumb = ref.kind === 'raw' || st.byId.has(ref.id) ? thumbUrl(ref) : `ls://photo/${ref.id}`;
     st.match = { id: st.active, full, name: ref.name, thumb, k: 1 };
