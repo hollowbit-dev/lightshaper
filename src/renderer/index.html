@@ -98,7 +98,8 @@
         <section class="grp" id="looksGrp">
           <h3><button class="grp-h" data-g="looks">Looks</button></h3>
           <div class="looks" id="looks"></div>
-          <button class="save-look" id="saveLook">Save current edits as a look</button>
+          <div class="match-bar" id="matchBar" hidden><img id="matchThumb" alt=""><div class="mb-t"><b>Matched to <span id="matchName"></span></b><div id="matchStrength"></div></div></div>
+          <div class="look-actions"><button class="save-look" id="matchBtn">Match a photo…</button><button class="save-look" id="saveLook">Save as a look</button></div>
         </section>
         <div id="groups"></div>
         <section class="grp closed" data-grp="mixer">
@@ -146,6 +147,16 @@
       <div class="where"><div class="mini-seg" id="exWhere"><button data-v=":beside" class="on">Beside the originals</button><button data-v="pick">Choose…</button></div><small class="muted" id="exWhereNote">In a new “Lightshaper edits” folder</small></div></label>
     <div class="progress" id="exProgress" hidden><i></i></div>
     <div class="sheet-actions"><button class="ghost" id="exCancel">Cancel</button><button class="primary" id="exGo">Export</button></div>
+  </div>
+</div>
+
+<!-- match a photo -->
+<div class="sheet-bg" id="matchSheet" hidden>
+  <div class="sheet wide" role="dialog">
+    <h2>Match a photo</h2>
+    <p class="muted">Pick a photo whose colours and mood you like. Lightshaper measures it and sets this photo's curve, white balance, saturation and colour grading to match. You can fine-tune everything after.</p>
+    <div class="match-grid" id="matchGrid"></div>
+    <div class="sheet-actions"><button class="ghost" id="matchFile">Choose a file…</button><span style="flex:1"></span><button class="ghost" id="matchCancel">Cancel</button></div>
   </div>
 </div>
 

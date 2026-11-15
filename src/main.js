@@ -151,6 +151,15 @@ ipcMain.handle('add-folder', async (e, given) => {
 });
 ipcMain.handle('remove-folder', (e, dir) => { settings().set({ folders: folders().filter((f) => f !== dir) }); return true; });
 ipcMain.handle('list', (e, dir) => (folders().includes(dir) ? listing(dir) : []));
+// A single reference photo from anywhere (for "Match a photo"). Only that file becomes readable.
+ipcMain.handle('pick-image', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], title: 'Choose a photo to match', buttonLabel: 'Match this',
+    filters: [{ name: 'Photos', extensions: ['jpg', 'jpeg', 'png', 'webp', 'avif', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'arw', 'raf', 'orf', 'rw2', 'pef', 'srw'] }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const p = r.filePaths[0], k = lib.kind(path.basename(p));
+  if (!k) return null;
+  return { id: allow(p), name: path.basename(p), kind: k };
+});
 ipcMain.handle('reveal', (e, id) => { const p = allowed.get(id); if (p) shell.showItemInFolder(p); return !!p; });
 
 // ---------- edits ----------

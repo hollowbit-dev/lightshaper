@@ -72,6 +72,17 @@ await page.screenshot({ path: `${out}/04d-clip.png` });
 await page.keyboard.press('j');
 await page.keyboard.press('4');
 console.log('rating', await page.evaluate(() => window.__ls.st.byId.get(window.__ls.st.active).rating));
+// match a photo: reset first, then match to the Sony landscape
+await page.click('#resetBtn'); await page.waitForTimeout(300);
+await page.click('#matchBtn'); await page.waitForTimeout(400);
+await page.screenshot({ path: `${out}/04e-match-sheet.png` });
+await page.click('#matchGrid button[title="fuji.RAF"]');
+await page.waitForSelector('#matchSheet[hidden]', { state: 'attached', timeout: 60000 });
+await page.waitForTimeout(600);
+console.log('match', await page.evaluate(() => { const s = window.__ls.st.s; return JSON.stringify({ temp: s.temp, tint: s.tint, sat: s.saturation, sh: s.gradeSh, hi: s.gradeHi, curve: s.curve.m }); }));
+await page.screenshot({ path: `${out}/04f-matched.png` });
+await page.evaluate(() => { const i = document.querySelector('#matchStrength input'); i.value = 50; i.dispatchEvent(new Event('input')); i.dispatchEvent(new Event('change')); });
+console.log('match bar visible at 50%:', await page.evaluate(() => !document.querySelector('#matchBar').hidden));
 for (const look of ['film', 'bw', 'golden']) {
   await page.click(`#looks .look[data-id="${look}"]`); await page.waitForTimeout(400);
   await page.screenshot({ path: `${out}/05-look-${look}.png` });

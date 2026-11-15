@@ -1,6 +1,7 @@
 // Lightshaper window: the Library (folders and photos) and the Editor (live preview, sliders, looks, crop).
 import { Engine, frameSize, outToSrc, curveLUT, M } from './engine.js';
 import { buildExif, insertExif } from './exif.js';
+import { measure, matchSettings, blend } from './match.js';
 import { decode } from './decode.js';
 import * as S from './settings.js';
 
@@ -494,7 +495,7 @@ function sliderEl(conf, get, set, def) {
     input.style.setProperty('--fill-a', Math.min(z, p) + '%'); input.style.setProperty('--fill-b', Math.max(z, p) + '%');
     wrap.classList.toggle('changed', Math.abs(val - def) > 1e-6);
   };
-  input.addEventListener('input', () => { const val = +input.value / k; set(val); show(val); st.s.look = null; markLook(); requestRender(); });
+  input.addEventListener('input', () => { const val = +input.value / k; set(val); show(val); if (!conf.keepLook) { st.s.look = null; markLook(); } requestRender(); });
   input.addEventListener('change', () => commit());
   const reset = () => { set(def); show(def); requestRender(); commit(); };
   wrap.querySelector('label').addEventListener('dblclick', reset);
@@ -613,7 +614,7 @@ async function flushSave() {
 window.addEventListener('beforeunload', () => { flushSave(); });
 
 // ---------- looks ----------
-function markLook() { $$('#looks .look').forEach((b) => b.classList.toggle('on', !!st.s && b.dataset.id === st.s.look)); }
+function markLook() { $$('#looks .look').forEach((b) => b.classList.toggle('on', !!st.s && b.dataset.id === st.s.look)); const mb = $('#matchBar'); if (mb) mb.hidden = !(st.s && st.s.look === 'match' && st.match && st.match.id === st.active); }
 function renderLooks() {
   const box = $('#looks'); box.innerHTML = '';
   if (!st.s) return;
@@ -915,7 +916,7 @@ api.onUpdate((u) => {
   bar.querySelector('.ghost').onclick = () => { api.setSettings({ skipVersion: u.version }); bar.hidden = true; };
   bar.hidden = false;
 });
-for (const id of ['exportSheet', 'settingsSheet']) $('#' + id).addEventListener('pointerdown', (e) => { if (e.target.id === id && !exporting) e.target.hidden = true; });
+for (const id of ['exportSheet', 'settingsSheet', 'matchSheet']) $('#' + id).addEventListener('pointerdown', (e) => { if (e.target.id === id && !exporting) e.target.hidden = true; });
 
 // ---------- drag and drop ----------
 let dragDepth = 0;
@@ -1213,6 +1214,56 @@ function prefetchNext(token) {
   // Wait a moment so the current photo's looks and histogram go first.
   const job = wait(700).then(() => (token === st.token ? decode(n) : null));
   st.prefetch = { id: n.id, job };
+}
+
+// ---------- match a photo ----------
+function openMatch() {
+  if (!st.loaded) return;
+  const grid = $('#matchGrid'); grid.innerHTML = '';
+  for (const p of st.photos) {
+    if (p.id === st.active) continue;
+    const b = document.createElement('button'); b.title = p.name;
+    b.innerHTML = `<img src="${thumbUrl(p)}" alt="" loading="lazy">`;
+    b.onclick = () => runMatch(p, b);
+    grid.append(b);
+  }
+  if (!grid.children.length) grid.innerHTML = '<p class="muted">No other photos in this folder. Choose a file instead.</p>';
+  $('#matchSheet').hidden = false;
+}
+$('#matchBtn').onclick = openMatch;
+$('#matchCancel').onclick = () => { $('#matchSheet').hidden = true; };
+$('#matchSheet').addEventListener('pointerdown', (e) => { if (e.target.id === 'matchSheet') e.target.hidden = true; });
+$('#matchFile').onclick = async () => { const p = await api.pickImage(); if (p) runMatch(p, null); };
+async function runMatch(ref, btn) {
+  if (btn) btn.insertAdjacentHTML('beforeend', '<span class="busy-dot"><span class="spin"></span></span>');
+  try {
+    const src = await decode(ref, { half: true });
+    worker.load(src); if (src.ref) { worker.calibrate(src.ref); src.ref.close(); } if (src.bitmap) src.bitmap.close();
+    const plain = S.fresh();
+    const [rw, rh] = fit(...worker.outSize(plain), 200);
+    const refStats = measure(worker.pixels(plain, rw, rh, { noSharp: true }));
+    const [w, h] = fit(...engine.outSize(st.s), 160);
+    const full = matchSettings((x) => engine.pixels(x, w, h, { noSharp: true, noMasks: true }), st.s, refStats);
+    full.look = 'match';
+    const thumb = ref.kind === 'raw' || st.byId.has(ref.id) ? thumbUrl(ref) : `ls://photo/${ref.id}`;
+    st.match = { id: st.active, full, name: ref.name, thumb, k: 1 };
+    st.s = blend(st.s, full, 1); st.s.look = 'match';
+    $('#matchSheet').hidden = true;
+    showMatchBar(); commit(); syncPanel(); requestRender();
+    toast(`Matched to ${ref.name}. Every change is in the sliders, so you can fine-tune it.`);
+  } catch (err) {
+    console.error(err); toast("Couldn't read that photo.");
+  } finally { btn?.querySelector('.busy-dot')?.remove(); }
+}
+let matchSl;
+function showMatchBar() {
+  const m = st.match;
+  $('#matchName').textContent = m.name; $('#matchThumb').src = m.thumb;
+  if (!matchSl) {
+    matchSl = sliderEl({ name: 'Strength', min: 0, max: 1, keepLook: true }, () => st.match.k, (v) => { st.match.k = v; st.s = blend(st.s, st.match.full, v); st.s.look = 'match'; syncPanel(); }, 1);
+    $('#matchStrength').append(matchSl.wrap);
+  }
+  matchSl.sync(); markLook();
 }
 
 // ---------- start ----------
