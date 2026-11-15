@@ -260,8 +260,9 @@ vec3 develop(vec2 suv, vec2 ouv) {
   e = clamp(e, 0., 1.);
   // Clipping warning: pure white areas turn red, pure black areas turn blue.
   if (uClip > .5) {
-    if (max(e.r, max(e.g, e.b)) > .996) e = vec3(1., .22, .3);
-    else if (max(e.r, max(e.g, e.b)) < .006) e = vec3(.2, .45, 1.);
+    // Only real loss of detail: all colours blown to white, or crushed to black.
+    if (min(e.r, min(e.g, e.b)) > .985 || dot(e, LUM) > .99) e = vec3(1., .22, .3);
+    else if (max(e.r, max(e.g, e.b)) < .012) e = vec3(.2, .45, 1.);
   }
   return e;
 }
