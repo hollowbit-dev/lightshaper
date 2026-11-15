@@ -1,0 +1,29 @@
+s = {
+	id = "8F4B3C2A-1111-2222-3333-444455556666",
+	internalName = "Old BW",
+	title = "Old BW Punch",
+	type = "Develop",
+	value = {
+		settings = {
+			Blacks2012 = -20,
+			Clarity2012 = 25,
+			Contrast2012 = 30,
+			ConvertToGrayscale = true,
+			Exposure2012 = 0.1,
+			GrainAmount = 30,
+			ProcessVersion = "10.0",
+			ToneCurvePV2012 = {
+				0,
+				0,
+				60,
+				45,
+				190,
+				205,
+				255,
+				255,
+			},
+		},
+		uuid = "8F4B3C2A-1111-2222-3333-444455556666",
+	},
+	version = 0,
+}

@@ -160,6 +160,21 @@ ipcMain.handle('pick-image', async () => {
   if (!k) return null;
   return { id: allow(p), name: path.basename(p), kind: k };
 });
+// Preset files (.xmp / .lrtemplate): only their text is read, and only files with those endings.
+async function readPresets(paths) {
+  const out = [];
+  for (const p of paths.slice(0, 500)) {
+    if (!/\.(xmp|lrtemplate)$/i.test(p)) continue;
+    try { const st = await fsp.stat(p); if (st.size > 2e6) continue; out.push({ name: path.basename(p), text: await fsp.readFile(p, 'utf8') }); } catch { /* skip */ }
+  }
+  return out;
+}
+ipcMain.handle('pick-presets', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], title: 'Import presets', buttonLabel: 'Import',
+    filters: [{ name: 'Lightroom presets', extensions: ['xmp', 'lrtemplate'] }] });
+  return r.canceled ? [] : readPresets(r.filePaths);
+});
+ipcMain.handle('read-presets', (e, paths) => readPresets([].concat(paths).map(String)));
 ipcMain.handle('reveal', (e, id) => { const p = allowed.get(id); if (p) shell.showItemInFolder(p); return !!p; });
 
 // ---------- edits ----------

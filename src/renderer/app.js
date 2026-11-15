@@ -2,6 +2,7 @@
 import { Engine, frameSize, outToSrc, curveLUT, M } from './engine.js';
 import { buildExif, insertExif } from './exif.js';
 import { measure, matchSettings, blend } from './match.js';
+import { parsePreset } from './presets.js';
 import { decode } from './decode.js';
 import * as S from './settings.js';
 
@@ -925,6 +926,8 @@ window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth =
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', async (e) => {
   e.preventDefault(); dragDepth = 0; $('#dropping').hidden = true;
+  const presetFiles = [...e.dataTransfer.files].filter((x) => /\.(xmp|lrtemplate)$/i.test(x.name));
+  if (presetFiles.length) { importPresets(await api.readPresets(presetFiles.map((x) => api.pathOf(x)))); return; }
   const f = e.dataTransfer.files[0]; if (!f) return;
   const p = api.pathOf(f); if (!p) return;
   const name = f.name;
@@ -1265,6 +1268,29 @@ function showMatchBar() {
   }
   matchSl.sync(); markLook();
 }
+
+// ---------- import Lightroom presets ----------
+async function importPresets(files) {
+  if (!files || !files.length) return;
+  const added = [], bad = [];
+  const have = new Set((st.prefs.presets || []).map((l) => l.name));
+  for (const f of files) {
+    try {
+      const p = parsePreset(f.text, f.name);
+      let name = p.name, i = 2; while (have.has(name)) name = `${p.name} ${i++}`;
+      have.add(name);
+      added.push({ id: 'u' + Date.now().toString(36) + added.length, name, s: p.s, user: true, imported: true });
+    } catch { bad.push(f.name); }
+  }
+  if (added.length) {
+    st.prefs.presets = [...(st.prefs.presets || []), ...added];
+    await api.setSettings({ presets: st.prefs.presets });
+    renderLooks();
+  }
+  const msg = added.length ? `Imported ${added.length} look${added.length === 1 ? '' : 's'}. Find them in Looks${st.mode === 'library' ? ' and in Apply look' : ''}.` : 'No presets could be read.';
+  toast(bad.length ? `${msg} ${bad.length} file${bad.length === 1 ? '' : 's'} skipped.` : msg, added.length && st.mode === 'edit' ? 'Try the first' : null, () => chooseLook(added[0]), 6000);
+}
+$('#importPresets').onclick = async () => importPresets(await api.pickPresets());
 
 // ---------- start ----------
 (async () => {

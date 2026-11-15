@@ -83,6 +83,13 @@ console.log('match', await page.evaluate(() => { const s = window.__ls.st.s; ret
 await page.screenshot({ path: `${out}/04f-matched.png` });
 await page.evaluate(() => { const i = document.querySelector('#matchStrength input'); i.value = 50; i.dispatchEvent(new Event('input')); i.dispatchEvent(new Event('change')); });
 console.log('match bar visible at 50%:', await page.evaluate(() => !document.querySelector('#matchBar').hidden));
+// import Lightroom presets (dialog stubbed like a user picking the 3 files)
+await app.evaluate(({ dialog }, files) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: files }); }, ['Warm-Film.xmp', 'Old-BW.lrtemplate', 'empty.xmp'].map((f) => path.join(root, 'test/fixtures', f)));
+await page.click('#importPresets'); await page.waitForTimeout(800);
+console.log('import toast:', await page.textContent('#toast'));
+console.log('imported:', await page.evaluate(() => JSON.stringify((window.__ls.st.prefs.presets || []).map((l) => [l.name, l.s]))));
+await page.click('#toast button'); await page.waitForTimeout(500);
+await page.screenshot({ path: `${out}/04g-preset.png` });
 for (const look of ['film', 'bw', 'golden']) {
   await page.click(`#looks .look[data-id="${look}"]`); await page.waitForTimeout(400);
   await page.screenshot({ path: `${out}/05-look-${look}.png` });
