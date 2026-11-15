@@ -45,6 +45,33 @@ const ms = await page.evaluate(async () => {
 });
 console.log('render per frame (4x throttle, 2400x1500):', ms.toFixed(1), 'ms');
 await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+// v0.2 tools
+await page.evaluate(() => { document.querySelector('.grp[data-grp="masks"]').classList.remove('closed'); document.querySelector('.grp[data-grp="masks"]').scrollIntoView(); });
+await page.click('#addGrad'); await page.waitForTimeout(150);
+await page.click('#addRadial'); await page.waitForTimeout(400);
+await page.screenshot({ path: `${out}/04b-masks.png` });
+// drag the radial's edge handle
+const h = await page.$('#maskSvg [data-k="rx"]'); const bb = await h.boundingBox();
+await page.mouse.move(bb.x + 7, bb.y + 7); await page.mouse.down(); await page.mouse.move(bb.x + 90, bb.y + 40, { steps: 5 }); await page.mouse.up();
+console.log('radial after drag', await page.evaluate(() => { const m = window.__ls.st.s.masks[1]; return [m.rx.toFixed(3), Math.round(m.angle)]; }));
+await page.evaluate(() => { const g = document.querySelector('.grp[data-grp="curve"]'); g.classList.remove('closed'); g.scrollIntoView(); });
+await page.waitForTimeout(100);
+const cv = await (await page.$('#curveCv')).boundingBox();
+await page.mouse.click(cv.x + cv.width * .25, cv.y + cv.height * .82);
+await page.mouse.move(cv.x + cv.width * .75, cv.y + cv.height * .25); await page.mouse.down(); await page.mouse.move(cv.x + cv.width * .75, cv.y + cv.height * .18, { steps: 3 }); await page.mouse.up();
+await page.waitForTimeout(300);
+console.log('curve points', await page.evaluate(() => JSON.stringify(window.__ls.st.s.curve.m)));
+await page.screenshot({ path: `${out}/04c-curve.png` });
+// white balance picker on the wall (left side)
+await page.keyboard.press('w');
+const sb = await (await page.$('#stage')).boundingBox();
+await page.mouse.click(sb.x + sb.width * .12, sb.y + sb.height * .3);
+console.log('wb picked', await page.evaluate(() => [window.__ls.st.s.temp, window.__ls.st.s.tint]));
+await page.keyboard.press('j'); await page.waitForTimeout(250);
+await page.screenshot({ path: `${out}/04d-clip.png` });
+await page.keyboard.press('j');
+await page.keyboard.press('4');
+console.log('rating', await page.evaluate(() => window.__ls.st.byId.get(window.__ls.st.active).rating));
 for (const look of ['film', 'bw', 'golden']) {
   await page.click(`#looks .look[data-id="${look}"]`); await page.waitForTimeout(400);
   await page.screenshot({ path: `${out}/05-look-${look}.png` });
@@ -77,6 +104,7 @@ await page.screenshot({ path: `${out}/10-export.png` });
 await page.click('#exGo');
 await page.waitForSelector('#toast:has-text("Exported")', { timeout: 60000 });
 console.log('exported:', fs.readdirSync(exportDir));
+for (const f of fs.readdirSync(exportDir)) { const b = fs.readFileSync(path.join(exportDir, f)); const i = b.indexOf('Exif'); console.log(f, b.length, 'bytes, EXIF', i > 0 ? b.subarray(i, i + 140).toString('latin1').replace(/[^\x20-\x7e]/g, '.') : 'none'); }
 // back to library: edited badge + batch paste
 await page.keyboard.press('Escape'); await page.waitForTimeout(800);
 await page.screenshot({ path: `${out}/11-library-edited.png` });

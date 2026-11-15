@@ -19,8 +19,13 @@ function save() {
 }
 app.on('before-quit', () => { if (timer) { clearTimeout(timer); try { fs.writeFileSync(file(), JSON.stringify(db)); } catch {} } });
 
+// Star ratings live beside the edits, under their own key.
+const R = () => (db.__ratings || (db.__ratings = {}));
+
 module.exports = {
-  get: (p) => (db[p] ? db[p].s : null),
+  rating: (p) => R()[p] || 0,
+  setRating(p, n) { if (n) R()[p] = n; else delete R()[p]; save(); },
+  get: (p) => (p !== '__ratings' && db[p] ? db[p].s : null),
   set(p, s) {
     if (s) db[p] = { s, t: Date.now() }; else delete db[p];
     save();

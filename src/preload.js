@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('ls', {
   reveal: (id) => ipcRenderer.invoke('reveal', id),
   getEdit: (id) => ipcRenderer.invoke('get-edit', id),
   saveEdit: (id, s, thumb) => ipcRenderer.invoke('save-edit', id, s, thumb),
+  setRating: (ids, n) => ipcRenderer.invoke('set-rating', ids, n),
   pickExportFolder: () => ipcRenderer.invoke('pick-export-folder'),
   exportWrite: (id, dir, ext, bytes) => ipcRenderer.invoke('export-write', id, dir, ext, bytes),
   showExport: (p) => ipcRenderer.invoke('show-export', p),

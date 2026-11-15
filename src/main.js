@@ -133,7 +133,7 @@ function folders() { return (settings().get().folders || []).filter((f) => fs.ex
 
 async function listing(dir) {
   const photos = await lib.scan(dir);
-  return photos.map((p) => ({ ...p, id: allow(p.path), edited: !!edits().get(p.path) }));
+  return photos.map((p) => ({ ...p, id: allow(p.path), edited: !!edits().get(p.path), rating: edits().rating(p.path) }));
 }
 
 ipcMain.handle('folders', () => folders().map((f) => ({ path: f, name: path.basename(f) })));
@@ -162,6 +162,12 @@ ipcMain.handle('save-edit', async (e, id, s, thumbJpeg) => {
   const file = path.join(thumbDir(), `${id}-edit.jpg`);
   if (s && thumbJpeg) { await fsp.mkdir(thumbDir(), { recursive: true }); await fsp.writeFile(file, Buffer.from(thumbJpeg)); }
   if (!s) await fsp.rm(file, { force: true });
+  return true;
+});
+
+ipcMain.handle('set-rating', (e, ids, n) => {
+  const v = Math.max(0, Math.min(5, n | 0));
+  for (const id of [].concat(ids)) { const p = allowed.get(id); if (p) edits().setRating(p, v); }
   return true;
 });
 

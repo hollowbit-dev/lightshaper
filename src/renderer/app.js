@@ -1,5 +1,6 @@
 // Lightshaper window: the Library (folders and photos) and the Editor (live preview, sliders, looks, crop).
-import { Engine, frameSize } from './engine.js';
+import { Engine, frameSize, outToSrc, curveLUT, M } from './engine.js';
+import { buildExif, insertExif } from './exif.js';
 import { decode } from './decode.js';
 import * as S from './settings.js';
 
@@ -90,7 +91,7 @@ async function openFolder(p) {
 
 function thumbUrl(p) { return `ls://thumb/${p.id}?v=${p.v || 0}`; }
 function tileHtml(p) {
-  return `<img loading="lazy" decoding="async" src="${thumbUrl(p)}" alt=""><div class="badges">${p.kind === 'raw' ? `<span class="badge">${esc(p.ext)}</span>` : ''}${p.edited ? '<span class="badge ed">EDITED</span>' : ''}</div><div class="nm">${esc(p.name)}</div>${st.dirty.has(p.id) ? '<i class="work-dot"></i>' : ''}`;
+  return `<img loading="lazy" decoding="async" src="${thumbUrl(p)}" alt=""><div class="badges">${p.kind === 'raw' ? `<span class="badge">${esc(p.ext)}</span>` : ''}${p.edited ? '<span class="badge ed">EDITED</span>' : ''}</div><div class="nm">${esc(p.name)}</div>${p.rating ? `<div class="stars">${'★'.repeat(p.rating)}</div>` : ''}${st.dirty.has(p.id) ? '<i class="work-dot"></i>' : ''}`;
 }
 function makeTile(p, small) {
   const t = document.createElement('div');
@@ -113,7 +114,7 @@ function renderGrid() {
   $('#folderName').textContent = st.folders.find((f) => f.path === st.folder)?.name || '';
   $('#photoCount').textContent = st.photos.length ? `${st.photos.length} photo${st.photos.length === 1 ? '' : 's'}` : 'No photos in this folder';
   const frag = document.createDocumentFragment();
-  for (const p of st.photos) frag.append(makeTile(p));
+  for (const p of shown()) frag.append(makeTile(p));
   grid.innerHTML = ''; grid.append(frag);
   updateSel();
 }
@@ -273,6 +274,7 @@ async function openEditor(id) {
   if (st.mode !== 'edit') setMode('edit');
   exitCrop(false);
   $('#photoName').textContent = p.name;
+  showStars();
   $('#errorCard').hidden = true;
   $('#meta').textContent = '';
   renderStrip();
@@ -287,8 +289,14 @@ async function openEditor(id) {
   st.hist = [S.clone(st.s)]; st.hi = 0;
   syncPanel();
   try {
+    // The next photo may already be decoded in the background.
+    const pre = st.prefetch && st.prefetch.id === id ? st.prefetch.job : null;
+    st.prefetch = null;
+    const preSrc = pre ? await pre.catch(() => null) : null;
+    if (token !== st.token) { preSrc?.bitmap?.close(); return; }
+    if (preSrc) showSource(preSrc, p);
     // RAW: a quick half-size pass first, then the full-size one.
-    if (p.kind === 'raw') {
+    else if (p.kind === 'raw') {
       const half = await decode(p, { half: true });
       if (token !== st.token) return;
       showSource(half, p);
@@ -303,6 +311,7 @@ async function openEditor(id) {
     $('#busy').hidden = true;
     renderLooks();
     preload(1);
+    prefetchNext(token);
   } catch (err) {
     if (token !== st.token) return;
     $('#busy').hidden = true; ph.hidden = true;
@@ -325,10 +334,12 @@ function showMeta(p) {
   const bits = [];
   const [w, h] = st.s ? engine.outSize(st.s) : [engine.w, engine.h];
   bits.push(`${w} × ${h}`);
-  if (m.camera_make || m.camera_model) bits.push(esc(`${m.camera_model || m.camera_make}`.trim()));
-  if (m.iso_speed) bits.push(`ISO ${Math.round(m.iso_speed)}`);
-  if (m.shutter) bits.push(m.shutter >= 1 ? `${m.shutter.toFixed(1)}s` : `1/${Math.round(1 / m.shutter)}s`);
-  if (m.aperture) bits.push(`f/${(+m.aperture).toFixed(1)}`);
+  const x = m.exif || {};
+  if (x.model || x.make) bits.push(esc(`${x.model || x.make}`.trim()));
+  if (x.iso) bits.push(`ISO ${Math.round(x.iso)}`);
+  if (x.exposure) bits.push(x.exposure >= 1 ? `${x.exposure.toFixed(1)}s` : `1/${Math.round(1 / x.exposure)}s`);
+  if (x.fnumber) bits.push(`f/${(+x.fnumber).toFixed(1)}`);
+  if (x.focal) bits.push(`${Math.round(x.focal)} mm`);
   $('#meta').innerHTML = bits.map((b) => `<span>${b}</span>`).join('');
 }
 // Warm up the next photo's thumbnail so moving through them feels instant.
@@ -385,8 +396,9 @@ function layout(full) {
 function draw() {
   if (st.mode !== 'edit' || !st.loaded || !st.s) return;
   const L = layout(st.cropping);
-  engine.render(st.s, L.view, { full: st.cropping, neutral: st.before, bg: [.047, .043, .063] });
+  engine.render(st.s, L.view, { full: st.cropping, neutral: st.before, bg: [.047, .043, .063], clip: st.clip && !st.before });
   st.rect = L.rect;
+  drawMaskOverlay();
   $('#baTag').hidden = !st.before;
   const zt = $('#zoomTag');
   zt.hidden = !st.zoom; if (st.zoom) zt.textContent = Math.round(L.view.scale * 100 / 1) + '%';
@@ -402,7 +414,9 @@ function drawHist() {
   const [w, h] = fit(...engine.outSize(st.s), 220);
   const px = engine.pixels(st.before ? { ...S.fresh(), geom: st.s.geom } : st.s, w, h, { noSharp: true });
   const R = new Float32Array(256), G = new Float32Array(256), B = new Float32Array(256);
-  for (let i = 0; i < px.length; i += 4) { R[px[i]]++; G[px[i + 1]]++; B[px[i + 2]]++; }
+  const Lh = new Float32Array(256);
+  for (let i = 0; i < px.length; i += 4) { R[px[i]]++; G[px[i + 1]]++; B[px[i + 2]]++; Lh[Math.round(px[i] * .2126 + px[i + 1] * .7152 + px[i + 2] * .0722)]++; }
+  st.lumHist = Lh; if (curveDrag == null) drawCurve();
   const c = $('#hist'), x = c.getContext('2d'), W = c.width, H = c.height;
   x.clearRect(0, 0, W, H);
   let mx = 1; for (let i = 2; i < 254; i++) mx = Math.max(mx, R[i], G[i], B[i]);
@@ -419,6 +433,8 @@ function drawHist() {
 const stage = $('#stage');
 let drag = null;
 stage.addEventListener('pointerdown', (e) => {
+  if (st.picking) { pickAt(e); return; }
+  if (e.target.closest('#maskSvg [data-k]')) return;
   if (st.cropping || !st.loaded || e.button !== 0 || e.target.closest('.crop-layer')) return;
   drag = { x: e.clientX, y: e.clientY, moved: false, z: st.zoom && { ...st.zoom } };
   stage.setPointerCapture(e.pointerId);
@@ -488,7 +504,7 @@ function sliderEl(conf, get, set, def) {
 function buildPanel() {
   const box = $('#groups'); box.innerHTML = '';
   for (const g of S.GROUPS) {
-    const sec = document.createElement('section'); sec.className = 'grp'; sec.dataset.grp = g.id;
+    const sec = document.createElement('section'); sec.className = 'grp' + (g.closed ? ' closed' : ''); sec.dataset.grp = g.id;
     sec.innerHTML = `<h3><button class="grp-h">${g.name}</button></h3><div class="grp-b"></div>`;
     const body = sec.querySelector('.grp-b');
     if (g.id === 'light') {
@@ -497,6 +513,13 @@ function buildPanel() {
       sec.querySelector('.grp-h').before(auto); sec.querySelector('h3').style.display = 'flex'; sec.querySelector('h3').style.alignItems = 'center';
       sec.querySelector('h3').prepend(sec.querySelector('.grp-h')); sec.querySelector('.grp-h').style.flex = '1';
     }
+    if (g.id === 'colour') {
+      const pick = document.createElement('button'); pick.className = 'auto-btn'; pick.id = 'wbPick'; pick.title = 'White balance: click something white or grey in the photo (W)';
+      pick.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" style="vertical-align:-2px"><path fill="currentColor" d="M13.6 2.4a2 2 0 0 0-2.8 0L9 4.2l-.7-.7-1 1 .7.7-5.3 5.3-.6 2.6-.6.6 1 1 .6-.6 2.6-.6L11 8.1l.7.7 1-1-.7-.7 1.8-1.8a2 2 0 0 0 0-2.8zM4.9 12.8l-1.3.3.3-1.3L9 6.7 9.9 7.6z"/></svg> Pick';
+      pick.onclick = (e) => { e.stopPropagation(); startPick(); };
+      const h3 = sec.querySelector('h3'); h3.style.display = 'flex'; h3.style.alignItems = 'center'; sec.querySelector('.grp-h').style.flex = '1'; h3.append(pick);
+    }
+    if (g.note) body.append(Object.assign(document.createElement('div'), { className: 'hint', textContent: g.note }));
     for (const c of g.sliders) {
       const el = sliderEl(c, () => st.s[c.key], (v) => { st.s[c.key] = v; }, S.DEFAULTS[c.key]);
       sliders.set(c.key, el); body.append(el.wrap);
@@ -508,6 +531,8 @@ function buildPanel() {
       body.append(row);
     }
     box.append(sec);
+    if (g.id === 'light') box.append(buildCurve());
+    if (g.id === 'detail') box.append(buildMasks());
   }
   buildMixer('h');
   buildGrade();
@@ -543,6 +568,7 @@ function syncPanel() {
   if (!st.s) return;
   for (const el of sliders.values()) el.sync();
   const bw = $('#bwToggle'); if (bw) bw.checked = !!st.s.bw;
+  drawCurve(); renderMaskList();
   markLook();
   $('#undoBtn').disabled = st.hi <= 0; $('#redoBtn').disabled = st.hi >= st.hist.length - 1;
 }
@@ -794,7 +820,7 @@ $('#cropBox').addEventListener('pointermove', (e) => {
 $('#cropBox').addEventListener('pointerup', () => { cd = null; });
 
 // ---------- export ----------
-const ex = { format: 'jpg', quality: 92, size: 0, where: ':beside', dir: null };
+const ex = { format: 'jpg', quality: 92, size: 0, where: ':beside', dir: null, exif: true };
 function exportIds() {
   if (st.mode === 'edit') return st.active ? [st.active] : [];
   return st.sel.size ? st.photos.filter((p) => st.sel.has(p.id)).map((p) => p.id) : st.photos.map((p) => p.id);
@@ -809,6 +835,7 @@ function openExport() {
   seg('exFormat', ex.format); seg('exSize', ex.size); seg('exWhere', ex.where === ':beside' ? ':beside' : 'pick');
   $('#exQuality').value = ex.quality; $('#exQualityV').textContent = ex.quality;
   $('#exQualityRow').hidden = ex.format === 'png';
+  $('#exExif').checked = ex.exif !== false; $('#exExifRow').hidden = ex.format !== 'jpg';
   $('#exWhereNote').textContent = ex.where === ':beside' ? 'In a new “Lightshaper edits” folder' : ex.dir || '';
   $('#exProgress').hidden = true; $('#exGo').disabled = false;
   $('#exportSheet').hidden = false;
@@ -817,7 +844,7 @@ $('#exportBtn').onclick = openExport;
 for (const id of ['exFormat', 'exSize']) {
   $$(`#${id} button`).forEach((b) => (b.onclick = () => {
     $$(`#${id} button`).forEach((x) => x.classList.toggle('on', x === b));
-    if (id === 'exFormat') { ex.format = b.dataset.v; $('#exQualityRow').hidden = ex.format === 'png'; } else ex.size = +b.dataset.v;
+    if (id === 'exFormat') { ex.format = b.dataset.v; $('#exQualityRow').hidden = ex.format === 'png'; $('#exExifRow').hidden = ex.format !== 'jpg'; } else ex.size = +b.dataset.v;
   }));
 }
 $$('#exWhere button').forEach((b) => (b.onclick = async () => {
@@ -828,6 +855,7 @@ $$('#exWhere button').forEach((b) => (b.onclick = async () => {
   $$('#exWhere button').forEach((x) => x.classList.toggle('on', x === b));
   $('#exWhereNote').textContent = ex.where === ':beside' ? 'In a new “Lightshaper edits” folder' : ex.dir;
 }));
+$('#exExif').onchange = (e) => { ex.exif = e.target.checked; };
 $('#exQuality').oninput = (e) => { ex.quality = +e.target.value; $('#exQualityV').textContent = ex.quality; };
 let exporting = false;
 $('#exCancel').onclick = () => { if (exporting) exporting = 'stop'; else $('#exportSheet').hidden = true; };
@@ -850,7 +878,9 @@ $('#exGo').onclick = async () => {
       const c = new OffscreenCanvas(img.width, img.height); c.getContext('2d').putImageData(img, 0, 0);
       const type = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[ex.format];
       const blob = await c.convertToBlob({ type, quality: ex.quality / 100 });
-      const r = await api.exportWrite(id, dir, ex.format, await blob.arrayBuffer());
+      let bytes = await blob.arrayBuffer();
+      if (ex.format === 'jpg' && ex.exif !== false) { try { bytes = insertExif(bytes, buildExif((src.meta && src.meta.exif) || {})); } catch { /* write without it */ } }
+      const r = await api.exportWrite(id, dir, ex.format, bytes);
       if (!r.ok) throw new Error(r.error);
       last = r.path;
     } catch (err) { fails.push(p.name); console.error(err); }
@@ -917,8 +947,13 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') { step(-1); return; }
     if (e.key === '\\' && !e.repeat) { baOn(); return; }
     if (e.key === 'z' || e.key === 'Z') { toggleZoom(); return; }
+    if (e.key === 'j' || e.key === 'J') { toggleClip(); return; }
+    if (e.key === 'w' || e.key === 'W') { startPick(); return; }
+    if (/^[0-5]$/.test(e.key) && !mod) { rate([st.active], +e.key); return; }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && st.maskSel) { deleteMask(st.maskSel); return; }
     if (e.key === 'c' || e.key === 'C') { st.cropping ? exitCrop(true) : enterCrop(); return; }
     if (e.key === 'Enter' && st.cropping) { exitCrop(true); return; }
+    if (e.key === 'Escape' && st.picking) { stopPick(); return; }
     if (e.key === 'Escape') { if (st.cropping) { st.s.geom = st.cropStart; exitCrop(false); } else setMode('library'); return; }
     if (e.key === 'g' || e.key === 'G') { setMode('library'); return; }
   } else {
@@ -927,8 +962,9 @@ window.addEventListener('keydown', (e) => {
     if (mod && e.key.toLowerCase() === 'v' && st.clip && st.sel.size) { e.preventDefault(); pasteTo([...st.sel]); return; }
     if ((e.key === 'Enter' || e.key === 'e' || e.key === 'E') && st.sel.size) { openEditor([...st.sel].pop()); return; }
     if (e.key === 'Escape') { st.sel.clear(); updateSel(); return; }
+    if (/^[0-5]$/.test(e.key) && !mod && st.sel.size) { rate([...st.sel], +e.key); return; }
     if (e.key.startsWith('Arrow') && st.photos.length) {
-      const ids = st.photos.map((p) => p.id);
+      const ids = shown().map((p) => p.id);
       const cur = st.anchor ? ids.indexOf(st.anchor) : -1;
       const cols = Math.max(1, Math.round($('#grid').clientWidth / (($('#grid .tile') || {}).offsetWidth + 10 || 200)));
       const d = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols }[e.key];
@@ -940,6 +976,244 @@ window.addEventListener('keydown', (e) => {
   }
 });
 window.addEventListener('keyup', (e) => { if (e.key === '\\') baOff(); });
+
+// ---------- tone curve ----------
+let curveCh = 'm', curveDrag = null;
+function buildCurve() {
+  const sec = document.createElement('section'); sec.className = 'grp closed'; sec.dataset.grp = 'curve';
+  sec.innerHTML = `<h3><button class="grp-h">Tone curve</button></h3><div class="grp-b">
+    <div class="mini-seg" id="curveSeg"><button data-c="m" class="on">RGB</button><button data-c="r">Red</button><button data-c="g">Green</button><button data-c="b">Blue</button></div>
+    <div class="curve-box"><canvas id="curveCv" width="540" height="540"></canvas></div>
+    <div class="hint">Click to add a point, drag to shape. Double-click a point to remove it.</div></div>`;
+  sec.querySelectorAll('#curveSeg button').forEach((b) => (b.onclick = () => { curveCh = b.dataset.c; sec.querySelectorAll('#curveSeg button').forEach((x) => x.classList.toggle('on', x === b)); drawCurve(); }));
+  const cv = sec.querySelector('canvas');
+  const pos = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, 1 - (e.clientY - r.top) / r.height, r]; };
+  const near = (pts, x, y, r) => pts.findIndex((p) => Math.hypot((p[0] - x) * r.width, (p[1] - y) * r.height) < 12);
+  cv.addEventListener('pointerdown', (e) => {
+    if (!st.s) return;
+    const [x, y, r] = pos(e); const pts = st.s.curve[curveCh];
+    let i = near(pts, x, y, r);
+    if (i < 0) {
+      if (pts.length >= 14) return;
+      pts.push([Math.min(.99, Math.max(.01, x)), Math.min(1, Math.max(0, y))]); pts.sort((a, b) => a[0] - b[0]);
+      i = pts.findIndex((p) => p[0] === Math.min(.99, Math.max(.01, x)));
+    }
+    curveDrag = i; cv.setPointerCapture(e.pointerId); st.s.look = null; drawCurve(); requestRender();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (curveDrag == null) return;
+    const [x, y] = pos(e); const pts = st.s.curve[curveCh]; const i = curveDrag;
+    const end = i === 0 || i === pts.length - 1;
+    const lo = end ? pts[i][0] : pts[i - 1][0] + .01, hi = end ? pts[i][0] : pts[i + 1][0] - .01;
+    pts[i] = [i === 0 ? Math.max(0, Math.min(pts[1][0] - .01, x)) : i === pts.length - 1 ? Math.min(1, Math.max(pts[i - 1][0] + .01, x)) : Math.min(hi, Math.max(lo, x)), Math.min(1, Math.max(0, y))];
+    drawCurve(); requestRender();
+  });
+  cv.addEventListener('pointerup', () => { if (curveDrag != null) { curveDrag = null; commit(); } });
+  cv.addEventListener('dblclick', (e) => {
+    const [x, y, r] = pos(e); const pts = st.s.curve[curveCh]; const i = near(pts, x, y, r);
+    if (i > 0 && i < pts.length - 1) { pts.splice(i, 1); drawCurve(); requestRender(); commit(); }
+    else if (i < 0) { st.s.curve[curveCh] = [[0, 0], [1, 1]]; drawCurve(); requestRender(); commit(); }
+  });
+  return sec;
+}
+function drawCurve() {
+  const cv = $('#curveCv'); if (!cv || !st.s) return;
+  const x = cv.getContext('2d'), W = cv.width, H = cv.height;
+  x.clearRect(0, 0, W, H);
+  x.fillStyle = 'rgba(0,0,0,.25)'; x.fillRect(0, 0, W, H);
+  if (st.lumHist) {
+    let mx = 1; for (let i = 3; i < 253; i++) mx = Math.max(mx, st.lumHist[i]);
+    x.beginPath(); x.moveTo(0, H);
+    for (let i = 0; i < 256; i++) x.lineTo(i / 255 * W, H - Math.min(1, Math.sqrt(st.lumHist[i] / mx)) * H * .5);
+    x.lineTo(W, H); x.fillStyle = 'rgba(255,255,255,.06)'; x.fill();
+  }
+  x.strokeStyle = 'rgba(255,255,255,.08)'; x.lineWidth = 1.5;
+  for (let k = 1; k < 4; k++) { x.beginPath(); x.moveTo(k * W / 4, 0); x.lineTo(k * W / 4, H); x.moveTo(0, k * H / 4); x.lineTo(W, k * H / 4); x.stroke(); }
+  x.beginPath(); x.moveTo(0, H); x.lineTo(W, 0); x.strokeStyle = 'rgba(255,255,255,.12)'; x.stroke();
+  const col = { m: '#f3f2f8', r: '#ff6b6b', g: '#5ad86a', b: '#5b8cff' }[curveCh];
+  for (const k of ['r', 'g', 'b', 'm']) {
+    if (k === curveCh) continue;
+    const c = st.s.curve[k]; if (c.length === 2 && c[0][1] === 0 && c[1][1] === 1 && c[0][0] === 0 && c[1][0] === 1) continue;
+    const lut = curveLUT(c); x.beginPath();
+    for (let i = 0; i < 256; i++) x.lineTo(i / 255 * W, H - lut[i] * H);
+    x.strokeStyle = { m: 'rgba(255,255,255,.25)', r: 'rgba(255,107,107,.35)', g: 'rgba(90,216,106,.35)', b: 'rgba(91,140,255,.35)' }[k]; x.lineWidth = 2; x.stroke();
+  }
+  const pts = st.s.curve[curveCh], lut = curveLUT(pts);
+  x.beginPath(); for (let i = 0; i < 256; i++) x.lineTo(i / 255 * W, H - lut[i] * H);
+  x.strokeStyle = col; x.lineWidth = 3; x.stroke();
+  for (const p of pts) { x.beginPath(); x.arc(p[0] * W, H - p[1] * H, 9, 0, 7); x.fillStyle = col; x.fill(); x.lineWidth = 3; x.strokeStyle = '#111017'; x.stroke(); }
+}
+
+// ---------- masks ----------
+function buildMasks() {
+  const sec = document.createElement('section'); sec.className = 'grp closed'; sec.dataset.grp = 'masks';
+  sec.innerHTML = `<h3><button class="grp-h">Masks <span class="count-pill" id="maskCount"></span></button></h3><div class="grp-b">
+    <div class="hint">Change just part of the photo: darken a sky, brighten a face.</div>
+    <div class="mask-add"><button class="ghost sm" id="addGrad">＋ Gradient</button><button class="ghost sm" id="addRadial">＋ Radial</button></div>
+    <div id="maskList" class="mask-list"></div><div id="maskEdit"></div></div>`;
+  sec.querySelector('#addGrad').onclick = () => addMask('grad');
+  sec.querySelector('#addRadial').onclick = () => addMask('radial');
+  sec.querySelector('.grp-h').addEventListener('click', () => setTimeout(() => requestRender(false), 0));
+  return sec;
+}
+function addMask(type) {
+  const m = S.newMask(type);
+  st.s.masks.push(m); st.maskSel = m.id; st.s.look = null;
+  renderMaskList(); requestRender(); commit();
+}
+function deleteMask(id) {
+  st.s.masks = st.s.masks.filter((m) => m.id !== id);
+  if (st.maskSel === id) st.maskSel = null;
+  renderMaskList(); requestRender(); commit();
+}
+function masksOpen() { const g = document.querySelector('.grp[data-grp="masks"]'); return g && !g.classList.contains('closed'); }
+function renderMaskList() {
+  const list = $('#maskList'); if (!list || !st.s) return;
+  const ms = st.s.masks || [];
+  $('#maskCount').textContent = ms.length || '';
+  if (!ms.find((m) => m.id === st.maskSel)) st.maskSel = ms.length ? ms[ms.length - 1].id : null;
+  list.innerHTML = '';
+  let n = { grad: 0, radial: 0 };
+  for (const m of ms) {
+    n[m.type]++;
+    const row = document.createElement('div'); row.className = 'mask-row' + (m.id === st.maskSel ? ' on' : '') + (m.on === false ? ' off' : '');
+    row.innerHTML = `<span class="mi ${m.type}"></span><span class="mn">${m.type === 'grad' ? 'Gradient' : 'Radial'} ${n[m.type]}</span><button class="eye" title="Show or hide">${m.on === false ? '○' : '●'}</button><button class="mdel" title="Delete (⌫)">×</button>`;
+    row.onclick = (e) => {
+      if (e.target.classList.contains('eye')) { m.on = m.on === false; renderMaskList(); requestRender(); commit(); return; }
+      if (e.target.classList.contains('mdel')) { deleteMask(m.id); return; }
+      st.maskSel = m.id; renderMaskList(); requestRender(false);
+    };
+    list.append(row);
+  }
+  const ed = $('#maskEdit'); ed.innerHTML = '';
+  const m = ms.find((x) => x.id === st.maskSel);
+  if (!m) return;
+  m.adj = m.adj || {};
+  for (const c of S.MASK_SLIDERS) {
+    const el = sliderEl(c, () => m.adj[c.key] || 0, (v) => { m.adj[c.key] = v; }, 0);
+    el.sync(); ed.append(el.wrap);
+  }
+  if (m.type === 'radial') { const f = sliderEl({ name: 'Feather', min: 0, max: 1 }, () => m.feather ?? .5, (v) => { m.feather = v; }, .5); f.sync(); ed.append(f.wrap); }
+  const inv = document.createElement('label'); inv.className = 'sw-row';
+  inv.innerHTML = `<span>${m.type === 'grad' ? 'Flip direction' : 'Affect the outside instead'}</span><input type="checkbox" ${m.invert ? 'checked' : ''}>`;
+  inv.querySelector('input').onchange = (e) => { m.invert = e.target.checked; requestRender(); commit(); };
+  ed.append(inv);
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function drawMaskOverlay() {
+  let svg = $('#maskSvg');
+  if (!svg) { svg = document.createElementNS(SVGNS, 'svg'); svg.id = 'maskSvg'; $('#stage').append(svg); hookMaskDrag(svg); }
+  const m = st.s && (st.s.masks || []).find((x) => x.id === st.maskSel);
+  const show = m && masksOpen() && !st.cropping && !st.before && st.loaded;
+  svg.style.display = show ? '' : 'none';
+  if (!show) return;
+  const r = st.rect, g = st.s.geom, c = g.crop;
+  const [fw, fh] = frameSize(engine.w, engine.h, g);
+  const toS = (u, v) => [r.x + (u - c.x) / c.w * r.w, r.y + (v - c.y) / c.h * r.h];
+  const pxPerFrame = r.w / (c.w * fw); // screen px per frame px
+  let h = '';
+  if (m.type === 'grad') {
+    const [ax, ay] = toS(m.x0, m.y0), [bx, by] = toS(m.x1, m.y1);
+    let dx = bx - ax, dy = by - ay; const L = Math.hypot(dx, dy) || 1; const nx = -dy / L * 3000, ny = dx / L * 3000;
+    const line = (x, y, op, dash) => `<line x1="${x - nx}" y1="${y - ny}" x2="${x + nx}" y2="${y + ny}" stroke="white" stroke-opacity="${op}" stroke-width="1.5" ${dash ? 'stroke-dasharray="5 5"' : ''}/>`;
+    h += line(ax, ay, .9) + line((ax + bx) / 2, (ay + by) / 2, .45, true) + line(bx, by, .9, true);
+    h += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="white" stroke-opacity=".5" stroke-width="1"/>`;
+    h += handle(ax, ay, 'a') + handle(bx, by, 'b') + handle((ax + bx) / 2, (ay + by) / 2, 'move', true);
+  } else {
+    const [cx, cy] = toS(m.cx, m.cy); const long = Math.max(fw, fh);
+    const rx = m.rx * long * pxPerFrame, ry = m.ry * long * pxPerFrame, a = m.angle || 0, rad = a * Math.PI / 180;
+    const inner = 1 - (m.feather ?? .5);
+    h += `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" transform="rotate(${a} ${cx} ${cy})" fill="none" stroke="white" stroke-opacity=".9" stroke-width="1.5"/>`;
+    h += `<ellipse cx="${cx}" cy="${cy}" rx="${rx * inner}" ry="${ry * inner}" transform="rotate(${a} ${cx} ${cy})" fill="none" stroke="white" stroke-opacity=".4" stroke-dasharray="5 5" stroke-width="1.2"/>`;
+    h += handle(cx + Math.cos(rad) * rx, cy + Math.sin(rad) * rx, 'rx') + handle(cx - Math.sin(rad) * ry, cy + Math.cos(rad) * ry, 'ry') + handle(cx, cy, 'move', true);
+  }
+  svg.innerHTML = h;
+}
+function handle(x, y, k, big) { return `<circle data-k="${k}" cx="${x}" cy="${y}" r="${big ? 9 : 7}" fill="${big ? 'rgba(169,139,255,.95)' : 'white'}" stroke="rgba(0,0,0,.55)" stroke-width="1.5"/>`; }
+function hookMaskDrag(svg) {
+  let d = null;
+  svg.addEventListener('pointerdown', (e) => {
+    const k = e.target.dataset && e.target.dataset.k; if (!k) return;
+    e.stopPropagation(); e.preventDefault();
+    const m = st.s.masks.find((x) => x.id === st.maskSel);
+    d = { k, m, start: S.clone(m), x: e.clientX, y: e.clientY };
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (!d) return;
+    const r = st.rect, g = st.s.geom, c = g.crop, [fw, fh] = frameSize(engine.w, engine.h, g);
+    const sr = $('#stage').getBoundingClientRect();
+    const u = c.x + (e.clientX - sr.left - r.x) / r.w * c.w, v = c.y + (e.clientY - sr.top - r.y) / r.h * c.h;
+    const du = (e.clientX - d.x) / r.w * c.w, dv = (e.clientY - d.y) / r.h * c.h;
+    const m = d.m, o = d.start;
+    if (m.type === 'grad') {
+      if (d.k === 'a') { m.x0 = u; m.y0 = v; } else if (d.k === 'b') { m.x1 = u; m.y1 = v; }
+      else { m.x0 = o.x0 + du; m.y0 = o.y0 + dv; m.x1 = o.x1 + du; m.y1 = o.y1 + dv; }
+    } else {
+      const long = Math.max(fw, fh);
+      const px = (u - m.cx) * fw, py = (v - m.cy) * fh;
+      if (d.k === 'move') { m.cx = o.cx + du; m.cy = o.cy + dv; }
+      else if (d.k === 'rx') { m.rx = Math.max(.01, Math.hypot(px, py) / long); m.angle = Math.atan2(py, px) * 180 / Math.PI; }
+      else { const rad = (m.angle || 0) * Math.PI / 180; m.ry = Math.max(.01, Math.abs(-Math.sin(rad) * px + Math.cos(rad) * py) / long); }
+    }
+    requestRender();
+  });
+  svg.addEventListener('pointerup', () => { if (d) { d = null; commit(); } });
+}
+
+// ---------- white balance picker ----------
+function startPick() { if (!st.loaded) return; st.picking = true; $('#stage').classList.add('picking'); $('#wbPick')?.classList.add('on'); toast('Click something that should be white or grey.', null, null, 3000); }
+function stopPick() { st.picking = false; $('#stage').classList.remove('picking'); $('#wbPick')?.classList.remove('on'); }
+function pickAt(e) {
+  const sr = $('#stage').getBoundingClientRect(), r = st.rect;
+  const ou = (e.clientX - sr.left - r.x) / r.w, ov = (e.clientY - sr.top - r.y) / r.h;
+  stopPick();
+  if (ou < 0 || ov < 0 || ou > 1 || ov > 1) return;
+  const [u, v] = M.apply(outToSrc(engine.w, engine.h, st.s.geom), ou, ov);
+  const [R, G, B] = engine.sampleBase(u, v);
+  if (!(R > 1e-4 && G > 1e-4 && B > 1e-4)) { toast('That spot is too dark to measure. Try a lighter grey.'); return; }
+  const cl = (x) => Math.max(-1, Math.min(1, Math.round(x * 100) / 100));
+  st.s.temp = cl(Math.log(B / R) / .64);
+  st.s.tint = cl(Math.log(G / Math.sqrt(R * B)) / .22);
+  st.s.look = null; syncPanel(); requestRender(); commit();
+}
+
+// ---------- clipping ----------
+function toggleClip() { st.clip = !st.clip; $('#clipBtn').classList.toggle('on', st.clip); requestRender(false); }
+$('#clipBtn').onclick = toggleClip;
+
+// ---------- ratings ----------
+function shown() {
+  const f = st.filter || 'all';
+  if (f === 'all') return st.photos;
+  if (f === 'edited') return st.photos.filter((p) => p.edited);
+  return st.photos.filter((p) => (p.rating || 0) >= +f);
+}
+async function rate(ids, n) {
+  ids = ids.filter(Boolean); if (!ids.length) return;
+  await api.setRating(ids, n);
+  for (const id of ids) { const p = st.byId.get(id); if (p) { p.rating = n; refreshTile(p); } }
+  if (st.mode === 'edit') showStars();
+  toast(n ? `${'★'.repeat(n)} ${ids.length > 1 ? `on ${ids.length} photos` : ''}` : 'Rating removed', null, null, 1500);
+  if (st.filter && st.filter !== 'all' && st.mode === 'library') renderGrid();
+}
+function showStars() {
+  const p = st.byId.get(st.active); const box = $('#stars'); if (!box) return;
+  box.innerHTML = [1, 2, 3, 4, 5].map((i) => `<button data-n="${i}" class="${p && p.rating >= i ? 'on' : ''}" title="${i} star${i > 1 ? 's' : ''} (${i})">★</button>`).join('');
+}
+$('#stars').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; const p = st.byId.get(st.active); const n = +b.dataset.n; rate([st.active], p && p.rating === n ? 0 : n); });
+$('#filter').onchange = (e) => { st.filter = e.target.value; st.sel.clear(); renderGrid(); };
+
+// ---------- prefetch ----------
+function prefetchNext(token) {
+  const i = st.photos.findIndex((x) => x.id === st.active);
+  const n = st.photos[i + 1];
+  if (!n || (st.prefetch && st.prefetch.id === n.id)) return;
+  if (st.prefetch) st.prefetch.job.then((x) => x?.bitmap?.close()).catch(() => {});
+  // Wait a moment so the current photo's looks and histogram go first.
+  const job = wait(700).then(() => (token === st.token ? decode(n) : null));
+  st.prefetch = { id: n.id, job };
+}
 
 // ---------- start ----------
 (async () => {

@@ -11,7 +11,7 @@
   "repository": "github:hollowbit-dev/lightshaper",
   "scripts": {
     "start": "electron .",
-    "test": "node test/engine.mjs && node test/shots.mjs",
+    "test": "node test/engine.mjs && node test/shots.mjs && node test/packaged.mjs",
     "icon": "swift scripts/make-icon.swift assets/icon.png && sips -z 1024 1024 assets/icon.png",
     "dist:mac": "electron-builder --mac --publish never",
     "dist:win": "electron-builder --win --publish never",

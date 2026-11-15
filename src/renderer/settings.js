@@ -14,7 +14,9 @@ export const DEFAULTS = Object.freeze({
   temp: 0, tint: 0,
   exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
   vibrance: 0, saturation: 0,
-  clarity: 0, dehaze: 0, fade: 0, vignette: 0, grain: 0, sharpen: 0.25,
+  clarity: 0, dehaze: 0, fade: 0, vignette: 0, grain: 0, sharpen: 0.25, noise: 0, colorNoise: 0,
+  curve: { m: [[0, 0], [1, 1]], r: [[0, 0], [1, 1]], g: [[0, 0], [1, 1]], b: [[0, 0], [1, 1]] },
+  masks: [],
   bw: false,
   gradeHi: { h: 45, s: 0 }, gradeSh: { h: 215, s: 0 },
   hsl: HSL_BANDS.map(() => ({ h: 0, s: 0, l: 0 })),
@@ -31,6 +33,8 @@ export function complete(s) {
   const o = { ...d, ...clone(s) };
   o.geom = { ...d.geom, ...(s.geom || {}), crop: { ...d.geom.crop, ...((s.geom || {}).crop || {}) } };
   o.hsl = d.hsl.map((b, i) => ({ ...b, ...((s.hsl || [])[i] || {}) }));
+  o.curve = { ...d.curve, ...(s.curve || {}) };
+  o.masks = Array.isArray(s.masks) ? clone(s.masks) : [];
   o.gradeHi = { ...d.gradeHi, ...(s.gradeHi || {}) }; o.gradeSh = { ...d.gradeSh, ...(s.gradeSh || {}) };
   return o;
 }
@@ -61,7 +65,11 @@ export const GROUPS = [
     { key: 'fade', name: 'Fade', min: 0, max: 1 },
     { key: 'vignette', name: 'Vignette' },
     { key: 'grain', name: 'Grain', min: 0, max: 1 },
+  ] },
+  { id: 'detail', name: 'Detail', closed: true, note: 'Zoom to 100% to judge these.', sliders: [
     { key: 'sharpen', name: 'Sharpen', min: 0, max: 1 },
+    { key: 'noise', name: 'Noise reduction', min: 0, max: 1 },
+    { key: 'colorNoise', name: 'Colour noise', min: 0, max: 1 },
   ] },
 ];
 
@@ -87,6 +95,21 @@ export const LOOKS = [
 export function applyLook(cur, look) {
   const s = complete(look.s);
   s.geom = clone(cur.geom);
+  if (!look.s.masks) s.masks = clone(cur.masks || []);
   s.look = look.id;
   return s;
+}
+
+// Local adjustments a mask can carry.
+export const MASK_SLIDERS = [
+  { key: 'exposure', name: 'Exposure', min: -3, max: 3, step: 0.05, kind: 'ev', show: (v) => (v > 0 ? '+' : '') + v.toFixed(2) },
+  { key: 'highlights', name: 'Highlights' }, { key: 'shadows', name: 'Shadows' },
+  { key: 'temp', name: 'Temperature', track: 'linear-gradient(90deg,#5b8cff,#e9e4d8,#ffb347)' },
+  { key: 'tint', name: 'Tint', track: 'linear-gradient(90deg,#4fd16b,#e9e4d8,#e05cd6)' },
+  { key: 'saturation', name: 'Saturation' }, { key: 'clarity', name: 'Clarity' }, { key: 'dehaze', name: 'Dehaze' },
+];
+export function newMask(type) {
+  const id = 'm' + Date.now().toString(36);
+  if (type === 'grad') return { id, type, on: true, invert: false, x0: .5, y0: .08, x1: .5, y1: .5, adj: { exposure: -.5 } };
+  return { id, type: 'radial', on: true, invert: false, cx: .5, cy: .5, rx: .22, ry: .22, angle: 0, feather: .6, adj: { exposure: .4 } };
 }

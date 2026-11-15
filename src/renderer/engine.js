@@ -22,6 +22,9 @@ void main() { ivec2 s = textureSize(uSrc, 0); ivec2 p = ivec2(vUv * vec2(s)); p 
 const FS_COPY = `#version 300 es
 precision highp float; uniform sampler2D uSrc; uniform float uLod; in vec2 vUv; out vec4 o;
 void main() { o = textureLod(uSrc, vUv, uLod); }`;
+const FS_SAMPLE = `#version 300 es
+precision highp float; uniform sampler2D uSrc; uniform vec2 uC, uR; in vec2 vUv; out vec4 o;
+void main() { o = textureLod(uSrc, uC + (vUv - .5) * 2. * uR, 0.); }`;
 const FS_BLUR = `#version 300 es
 precision highp float; uniform sampler2D uSrc; uniform vec2 uDir; in vec2 vUv; out vec4 o;
 void main() {
@@ -58,6 +61,15 @@ uniform vec3 uWB;
 uniform float uExp, uCon, uHi, uSh, uWh, uBl, uVib, uSat, uClar, uHaze, uVig, uGrain, uSharp, uBW, uRaw, uFade, uBaseEV;
 uniform vec3 uSplitHi, uSplitSh; // colour grading tints (already scaled)
 uniform vec4 uHslHue[2], uHslSat[2], uHslLum[2]; // 8 colour bands
+uniform sampler2D uCurve; uniform float uUseCurve;   // tone curve lookup (R, G, B)
+uniform float uNoise, uCNoise, uClip;
+uniform vec4 uCrop; uniform vec2 uFramePx;           // crop in frame uv, frame size in pixels
+#define MAXM 8
+uniform int uMaskN;
+uniform vec4 uMaskA[MAXM]; // type (1 gradient, 2 radial), invert, feather, angle
+uniform vec4 uMaskB[MAXM]; // gradient: x0 y0 x1 y1 (frame px) / radial: cx cy rx ry (frame px)
+uniform vec4 uMaskL[MAXM]; // exposure, temp, tint, clarity
+uniform vec4 uMaskK[MAXM]; // saturation, highlights, shadows, dehaze
 in vec2 vUv; out vec4 o;
 
 const vec3 LUM = vec3(.2126, .7152, .0722);
@@ -77,7 +89,7 @@ float band(float h, float centre) { float d = abs(fract(h - centre + .5) - .5) *
 float aces(float x) { x *= .8; return clamp(x * (2.51 * x + .03) / (x * (2.43 * x + .59) + .14), 0., 1.2); }
 
 // Shape one brightness value (0..1, perceptual) with the light sliders.
-float tone(float p, float pb) {
+float tone(float p, float pb, float mSh, float mHi) {
   // Blacks and whites move the ends.
   p += uBl * .14 * pow(max(1. - p, 0.), 5.);
   p += uWh * .16 * pow(clamp(p, 0., 1.4), 4.);
@@ -85,8 +97,8 @@ float tone(float p, float pb) {
   float m = mix(p, pb, .55);
   float sh = pow(max(1. - m, 0.), 2.6) * smoothstep(-.02, .22, p);
   float hi = pow(clamp(m, 0., 1.3), 2.2) * smoothstep(1.25, .35, p - .25);
-  p += uSh * .32 * sh;
-  p += uHi * .30 * hi;
+  p += (uSh + mSh) * .32 * sh;
+  p += (uHi + mHi) * .30 * hi;
   // Contrast: an S curve around middle grey that keeps black and white in place.
   float k = exp(uCon * .85);
   float pv = .42;
@@ -100,8 +112,68 @@ float tone(float p, float pb) {
   return clamp(p, 0., 1.);
 }
 
+float maskW(int i, vec2 fp) {
+  vec4 a = uMaskA[i], b = uMaskB[i];
+  float w;
+  if (a.x < 1.5) {
+    vec2 d = b.zw - b.xy;
+    float t = dot(fp - b.xy, d) / max(dot(d, d), 1e-6);
+    w = 1. - smoothstep(0., 1., clamp(t, 0., 1.));
+  } else {
+    vec2 q = fp - b.xy; float ca = cos(a.w), sa = sin(a.w);
+    q = vec2(ca * q.x + sa * q.y, -sa * q.x + ca * q.y) / max(b.zw, vec2(1.));
+    float f = max(a.z, .02);
+    w = 1. - smoothstep(1. - f, 1., length(q));
+  }
+  return a.y > .5 ? 1. - w : w;
+}
+
 vec3 develop(vec2 suv, vec2 ouv) {
   vec3 c = texture(uBase, suv).rgb;
+  // Noise reduction: smooth brightness with edge-aware weights, and colour speckles over a wider area.
+  if (uNoise > 0. || uCNoise > 0.) {
+    float y0 = max(dot(c, LUM), 1e-5);
+    vec3 chroma = c / y0;
+    if (uCNoise > 0.) {
+      vec3 acc = chroma; float wsum = 1.;
+      float rad = 2. + uCNoise * 5.;
+      for (int i = 0; i < 12; i++) {
+        float ang = float(i) * 2.0944 + float(i / 3) * .785;
+        float rr = rad * (.45 + .55 * float(i % 3) / 2.);
+        vec3 s = texture(uBase, suv + vec2(cos(ang), sin(ang)) * rr * uTexel).rgb;
+        float ys = max(dot(s, LUM), 1e-5);
+        float wgt = exp(-pow(log2(ys / y0) * 1.5, 2.));
+        acc += s / ys * wgt; wsum += wgt;
+      }
+      chroma = mix(chroma, acc / wsum, min(1., uCNoise * 1.3));
+    }
+    float ny = y0;
+    if (uNoise > 0.) {
+      float sig = .02 + uNoise * .09; float acc = y0, wsum = 1.;
+      for (int i = 0; i < 8; i++) {
+        float ang = float(i) * .785;
+        vec2 off = vec2(cos(ang), sin(ang)) * (1. + uNoise * 1.5) * uTexel;
+        float ys = dot(texture(uBase, suv + off).rgb, LUM);
+        float wgt = exp(-pow((sqrt(max(ys, 0.)) - sqrt(y0)) / sig, 2.));
+        acc += ys * wgt; wsum += wgt;
+      }
+      ny = mix(y0, acc / wsum, min(1., uNoise * 1.2));
+    }
+    c = chroma * ny;
+  }
+  // Masks (gradients and radials) add their own local adjustments.
+  vec4 mL = vec4(0.), mK = vec4(0.);
+  if (uMaskN > 0) {
+    vec2 fp = (uCrop.xy + ouv * uCrop.zw) * uFramePx;
+    for (int i = 0; i < MAXM; i++) {
+      if (i >= uMaskN) break;
+      float w = maskW(i, fp);
+      mL += uMaskL[i] * w; mK += uMaskK[i] * w;
+    }
+    vec3 mwb = vec3(exp(mL.y * .32), exp(-mL.z * .22), exp(-mL.y * .32));
+    mwb /= dot(mwb, LUM);
+    c *= mwb * exp2(mL.x);
+  }
   // Sharpening at the photo's own pixel scale (only visible near 100%).
   if (uSharp > 0.) {
     vec3 n = texture(uBase, suv + vec2(uTexel.x, 0.)).rgb + texture(uBase, suv - vec2(uTexel.x, 0.)).rgb
@@ -112,20 +184,21 @@ vec3 develop(vec2 suv, vec2 ouv) {
   }
   float gain = exp2(uExp + uBaseEV);
   c *= uWB * gain;
-  float blur = texture(uBlur, suv).r * dot(uWB, LUM) * gain;
+  float blur = texture(uBlur, suv).r * dot(uWB, LUM) * gain * exp2(mL.x);
+  float clar = uClar + mL.w, haze = uHaze + mK.w;
 
   float y = max(dot(c, LUM), 1e-6);
   // Clarity: local contrast in the midtones, measured against the blurred copy.
-  if (uClar != 0.) {
+  if (clar != 0.) {
     float r = clamp(log2(y / max(blur, 1e-6)), -3., 3.);
     float mid = smoothstep(0., .25, enc(y)) * smoothstep(1.1, .55, enc(y));
-    float ny = y * exp2(uClar * .55 * r * mid);
+    float ny = y * exp2(clar * .55 * r * mid);
     c *= ny / y; y = ny;
   }
   // Dehaze: remove (or add) a flat veil of light.
-  if (uHaze != 0.) {
-    float v = .028 * uHaze;
-    c = uHaze > 0. ? max(c - v, 0.) / (1. - v) : mix(c, vec3(.42), -uHaze * .26);
+  if (haze != 0.) {
+    float v = .028 * haze;
+    c = haze > 0. ? max(c - v, 0.) / (1. - v) : mix(c, vec3(.42), -haze * .26);
     y = max(dot(c, LUM), 1e-6);
   }
 
@@ -136,7 +209,7 @@ vec3 develop(vec2 suv, vec2 ouv) {
   }
   float p = enc(min(y, 8.));
   float pb = enc(min(blur, 8.));
-  float np = tone(p, pb);
+  float np = tone(p, pb, mK.z, mK.y);
   float ny = dec(np);
   vec3 col = c * (ny / y);
   // Keep colours inside the screen's range by easing them toward white instead of clipping.
@@ -144,6 +217,11 @@ vec3 develop(vec2 suv, vec2 ouv) {
   if (mx > 1.) col = mix(vec3(ny), col, clamp((1. - ny) / max(mx - ny, 1e-5), 0., 1.));
 
   vec3 e = enc3(clamp(col, 0., 1.));
+  // Tone curve.
+  if (uUseCurve > .5) {
+    vec3 t = e * (255. / 256.) + .5 / 256.;
+    e = vec3(texture(uCurve, vec2(t.r, .5)).r, texture(uCurve, vec2(t.g, .5)).g, texture(uCurve, vec2(t.b, .5)).b);
+  }
   // Colour bands (8 hues): hue shift, saturation, brightness.
   vec3 hsv = rgb2hsv(e);
   float dh = 0., ds = 0., dl = 0.;
@@ -163,7 +241,7 @@ vec3 develop(vec2 suv, vec2 ouv) {
   // Vibrance boosts quiet colours more than strong ones; saturation boosts all.
   float sat = max(e.r, max(e.g, e.b)) - min(e.r, min(e.g, e.b));
   e = g + (e - g) * (1. + uVib * (1. - sat) * 1.1 * (uVib > 0. ? 1. : .9));
-  e = g + (e - g) * (1. + uSat);
+  e = g + (e - g) * (1. + uSat + mK.x);
   // Colour grading: tint shadows and highlights.
   e += uSplitSh * pow(1. - g, 2.) + uSplitHi * pow(g, 2.);
   if (uBW > .5) { float l = dot(clamp(e, 0., 1.), vec3(.30, .59, .11)); e = vec3(l); }
@@ -179,7 +257,13 @@ vec3 develop(vec2 suv, vec2 ouv) {
     float n = vnoise(gp) * .75 + vnoise(gp * 2.3 + 7.1) * .45;
     e += n * uGrain * .16 * (1. - abs(g - .5) * .9);
   }
-  return clamp(e, 0., 1.);
+  e = clamp(e, 0., 1.);
+  // Clipping warning: pure white areas turn red, pure black areas turn blue.
+  if (uClip > .5) {
+    if (max(e.r, max(e.g, e.b)) > .996) e = vec3(1., .22, .3);
+    else if (max(e.r, max(e.g, e.b)) < .006) e = vec3(.2, .45, 1.);
+  }
+  return e;
 }
 
 void main() {
@@ -243,7 +327,7 @@ export class Engine {
     this.maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     this.progs = {
       srgb: compile(gl, VS, FS_IMPORT_SRGB), raw: compile(gl, VS, FS_IMPORT_RAW), copy: compile(gl, VS, FS_COPY),
-      blur: compile(gl, VS, FS_BLUR), blur2: compile(gl, VS, FS_BLUR2), dev: compile(gl, VS, FS_DEVELOP),
+      blur: compile(gl, VS, FS_BLUR), blur2: compile(gl, VS, FS_BLUR2), sample: compile(gl, VS, FS_SAMPLE), dev: compile(gl, VS, FS_DEVELOP),
     };
     const vb = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vb);
@@ -339,6 +423,23 @@ export class Engine {
     return this.baseEV;
   }
 
+  // Average linear colour of the photo around a point (photo uv), for the white balance picker.
+  sampleBase(u, v) {
+    const gl = this.gl;
+    const t = this.tex(8, 8, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT), f = this.fbo(t);
+    const r = 10 / Math.max(this.w, this.h);
+    this.draw(this.progs.sample, f, 8, 8, (un) => {
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.base); gl.uniform1i(un.uSrc, 0);
+      gl.uniform2f(un.uC, u, v); gl.uniform2f(un.uR, r * Math.max(this.w, this.h) / this.w, r * Math.max(this.w, this.h) / this.h);
+    });
+    const px = new Float32Array(8 * 8 * 4);
+    gl.readPixels(0, 0, 8, 8, gl.RGBA, gl.FLOAT, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(f); gl.deleteTexture(t);
+    const c = [0, 0, 0];
+    for (let i = 0; i < 64; i++) for (let k = 0; k < 3; k++) c[k] += px[i * 4 + k] / 64;
+    return c;
+  }
+
   // Size of the finished (cropped, straightened) photo in pixels.
   outSize(s) {
     const [fw, fh] = frameSize(this.w, this.h, s.geom);
@@ -384,6 +485,25 @@ export class Engine {
       f('uSharp', opts.noSharp ? 0 : d.sharpen); f('uBW', d.bw ? 1 : 0); f('uRaw', this.isRaw ? 1 : 0); f('uBaseEV', this.baseEV || 0); f('uFade', d.fade);
       gl.uniform3fv(u.uSplitHi, tint3(d.gradeHi.h, d.gradeHi.s)); gl.uniform3fv(u.uSplitSh, tint3(d.gradeSh.h, d.gradeSh.s));
       gl.uniform4fv(u.uHslHue, hue); gl.uniform4fv(u.uHslSat, sat); gl.uniform4fv(u.uHslLum, lum);
+      const curve = curveTex.call(this, d.curve);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, curve || this.blur); gl.uniform1i(u.uCurve, 2);
+      f('uUseCurve', curve ? 1 : 0);
+      f('uNoise', d.noise || 0); f('uCNoise', d.colorNoise || 0); f('uClip', opts.clip ? 1 : 0);
+      gl.uniform4f(u.uCrop, crop.x, crop.y, crop.w, crop.h); gl.uniform2f(u.uFramePx, fw, fh);
+      const ms = (opts.noMasks ? [] : (d.masks || []).filter((m) => m.on !== false)).slice(0, 8);
+      gl.uniform1i(u.uMaskN, ms.length);
+      if (ms.length) {
+        const A = new Float32Array(32), B = new Float32Array(32), Lm = new Float32Array(32), K = new Float32Array(32);
+        const long = Math.max(fw, fh);
+        ms.forEach((m, i) => {
+          const j = i * 4, a = m.adj || {};
+          if (m.type === 'grad') { A.set([1, m.invert ? 1 : 0, 0, 0], j); B.set([m.x0 * fw, m.y0 * fh, m.x1 * fw, m.y1 * fh], j); }
+          else { A.set([2, m.invert ? 1 : 0, m.feather ?? .5, (m.angle || 0) * Math.PI / 180], j); B.set([m.cx * fw, m.cy * fh, m.rx * long, m.ry * long], j); }
+          Lm.set([a.exposure || 0, a.temp || 0, a.tint || 0, a.clarity || 0], j);
+          K.set([a.saturation || 0, a.highlights || 0, a.shadows || 0, a.dehaze || 0], j);
+        });
+        gl.uniform4fv(u.uMaskA, A); gl.uniform4fv(u.uMaskB, B); gl.uniform4fv(u.uMaskL, Lm); gl.uniform4fv(u.uMaskK, K);
+      }
     });
     return { ow, oh, scale };
   }
@@ -436,6 +556,52 @@ export class Engine {
     return out;
   }
 
+}
+
+// Tone curve -> 256x1 lookup texture (cached). Points are [x, y] in 0..1; monotone cubic between them.
+export function curveLUT(pts) {
+  const p = (pts && pts.length >= 2 ? pts : [[0, 0], [1, 1]]).slice().sort((a, b) => a[0] - b[0]);
+  const n = p.length, xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+  const dx = [], dy = [], m = [];
+  for (let i = 0; i < n - 1; i++) { dx.push(Math.max(1e-6, xs[i + 1] - xs[i])); dy.push((ys[i + 1] - ys[i]) / Math.max(1e-6, xs[i + 1] - xs[i])); }
+  m.push(dy[0]);
+  for (let i = 1; i < n - 1; i++) m.push(dy[i - 1] * dy[i] <= 0 ? 0 : (dy[i - 1] + dy[i]) / 2);
+  m.push(dy[n - 2]);
+  for (let i = 0; i < n - 1; i++) {
+    if (dy[i] === 0) { m[i] = m[i + 1] = 0; continue; }
+    const a = m[i] / dy[i], b = m[i + 1] / dy[i], h = a * a + b * b;
+    if (h > 9) { const t = 3 / Math.sqrt(h); m[i] = t * a * dy[i]; m[i + 1] = t * b * dy[i]; }
+  }
+  const out = new Float32Array(256);
+  for (let k = 0; k < 256; k++) {
+    const x = k / 255;
+    if (x <= xs[0]) { out[k] = ys[0]; continue; }
+    if (x >= xs[n - 1]) { out[k] = ys[n - 1]; continue; }
+    let i = 0; while (x > xs[i + 1]) i++;
+    const h = dx[i], t = (x - xs[i]) / h, t2 = t * t, t3 = t2 * t;
+    out[k] = (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * m[i + 1];
+  }
+  return out.map((v) => Math.min(1, Math.max(0, v)));
+}
+const isIdentity = (c) => !c || c.length === 2 && c[0][0] === 0 && c[0][1] === 0 && c[1][0] === 1 && c[1][1] === 1;
+function curveTex(curve) {
+  if (!curve || ['m', 'r', 'g', 'b'].every((k) => isIdentity(curve[k]))) return null;
+  const key = JSON.stringify(curve);
+  if (this._curveKey === key) return this._curve;
+  const gl = this.gl;
+  const M = curveLUT(curve.m), ch = ['r', 'g', 'b'].map((k) => curveLUT(curve[k]));
+  const data = new Uint8Array(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    for (let c = 0; c < 3; c++) {
+      const v = ch[c][Math.round(M[i] * 255)];
+      data[i * 4 + c] = Math.round(v * 255);
+    }
+    data[i * 4 + 3] = 255;
+  }
+  if (this._curve) gl.deleteTexture(this._curve);
+  this._curve = this.tex(256, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  this._curveKey = key;
+  return this._curve;
 }
 
 export { M };

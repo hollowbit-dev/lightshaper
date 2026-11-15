@@ -33,7 +33,7 @@
     </aside>
     <div class="lib-main">
       <div class="lib-bar" id="libBar" hidden>
-        <div class="lib-title"><b id="folderName"></b><span class="muted" id="photoCount"></span></div>
+        <div class="lib-title"><b id="folderName"></b><span class="muted" id="photoCount"></span><select id="filter" class="filter" aria-label="Show"><option value="all">All photos</option><option value="1">★ 1 and up</option><option value="2">★ 2 and up</option><option value="3">★ 3 and up</option><option value="4">★ 4 and up</option><option value="5">★ 5</option><option value="edited">Edited</option></select></div>
         <div class="lib-actions" id="selActions">
           <span class="sel-count" id="selCount"></span>
           <button class="ghost sm" id="copyEdits" title="Copy edits (⌘C)">Copy edits</button>
@@ -77,7 +77,7 @@
         <div class="tb-l">
           <button class="tb" id="prevBtn" title="Previous (←)"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M10.5 2.5 5 8l5.5 5.5-1 1L3 8l6.5-6.5z"/></svg></button>
           <button class="tb" id="nextBtn" title="Next (→)"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M5.5 2.5 11 8l-5.5 5.5 1 1L13 8 6.5 1.5z"/></svg></button>
-          <span class="tb-name" id="photoName"></span>
+          <span class="tb-name" id="photoName"></span><span class="stars-ed" id="stars"></span>
         </div>
         <div class="tb-c">
           <button class="tb" id="undoBtn" title="Undo (⌘Z)"><svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M5.3 3.3 6.4 4.4 4.8 6H10a4 4 0 1 1 0 8H7v-1.5h3a2.5 2.5 0 0 0 0-5H4.8l1.6 1.6-1.1 1.1L1.8 6.8z"/></svg></button>
@@ -93,7 +93,7 @@
     </div>
 
     <aside class="panel" id="panel">
-      <div class="hist-wrap"><canvas id="hist" width="560" height="150"></canvas><div class="meta" id="meta"></div></div>
+      <div class="hist-wrap"><canvas id="hist" width="560" height="150"></canvas><button class="clip-btn" id="clipBtn" title="Show clipped highlights (red) and shadows (blue) (J)">Clipping</button><div class="meta" id="meta"></div></div>
       <div class="panel-scroll" id="panelScroll">
         <section class="grp" id="looksGrp">
           <h3><button class="grp-h" data-g="looks">Looks</button></h3>
@@ -141,6 +141,7 @@
     <label class="row" id="exQualityRow"><span>Quality</span><input type="range" id="exQuality" min="50" max="100" value="92"><b class="num" id="exQualityV">92</b></label>
     <label class="row"><span>Size</span>
       <div class="mini-seg" id="exSize"><button data-v="0" class="on">Full</button><button data-v="4096">4096</button><button data-v="2048">2048</button><button data-v="1080">1080</button></div></label>
+    <label class="row" id="exExifRow"><span>Info</span><span class="check"><input type="checkbox" id="exExif" checked> Keep camera info (camera, lens, settings, date). Location is never included.</span></label>
     <label class="row"><span>Save to</span>
       <div class="where"><div class="mini-seg" id="exWhere"><button data-v=":beside" class="on">Beside the originals</button><button data-v="pick">Choose…</button></div><small class="muted" id="exWhereNote">In a new “Lightshaper edits” folder</small></div></label>
     <div class="progress" id="exProgress" hidden><i></i></div>
