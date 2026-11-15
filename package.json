@@ -1,7 +1,7 @@
 {
   "name": "lightshaper",
   "productName": "Lightshaper",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A free, offline photo editor. Sliders, looks, crop, RAW files and batch export. Your originals are never changed. For Mac and Windows.",
   "main": "src/main.js",
   "private": true,

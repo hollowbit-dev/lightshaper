@@ -35,4 +35,15 @@ async function scan(dir) {
   return out.sort((a, b) => a.time - b.time || a.name.localeCompare(b.name));
 }
 
-module.exports = { scan, kind, RAW, IMG, EXTRA };
+// Describes single photos (opened on their own, not as a folder).
+async function describe(paths) {
+  const out = [];
+  for (const p of paths) {
+    const name = path.basename(p), k = kind(name);
+    if (!k) continue;
+    try { const st = await fs.stat(p); if (st.isFile()) out.push({ path: p, name, kind: k, ext: path.extname(name).slice(1).toUpperCase(), size: st.size, time: st.birthtimeMs || st.mtimeMs }); } catch { /* gone */ }
+  }
+  return out;
+}
+
+module.exports = { scan, describe, kind, RAW, IMG, EXTRA };

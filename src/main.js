@@ -107,6 +107,7 @@ ipcMain.handle('set-settings', (e, patch) => {
   if (patch.export && typeof patch.export === 'object') ok.export = patch.export;
   if (Array.isArray(patch.presets)) ok.presets = patch.presets.slice(0, 200);
   if (typeof patch.thumbSize === 'number') ok.thumbSize = patch.thumbSize;
+  if (typeof patch.lastPlace === 'string') ok.lastPlace = patch.lastPlace;
   return settings().set(ok);
 });
 ipcMain.handle('check-updates', () => updates.check({ manual: true }));
@@ -124,7 +125,26 @@ ipcMain.handle('folders', () => folders().map((f) => ({ path: f, name: path.base
 // Opens photos or a folder. On a Mac one window can pick either; Windows can't mix them, so
 // `mode` 'files' asks for photos and anything else asks for a folder.
 const PHOTO_EXT = () => [...lib.IMG, ...Object.keys(lib.EXTRA), ...lib.RAW];
+// Photos opened on their own (not as a folder) are kept in a "Recent photos" list.
+function recentFiles() { return (settings().get().recent || []).filter((f) => fs.existsSync(f)); }
+async function addRecent(paths) {
+  const ok = (await lib.describe(paths)).map((p) => p.path);
+  if (ok.length) settings().set({ recent: [...ok, ...recentFiles().filter((f) => !ok.includes(f))].slice(0, 500) });
+  return ok;
+}
+ipcMain.handle('recent', async () => (await lib.describe(recentFiles())).map((p) => ({ ...p, id: allow(p.path), edited: !!edits().get(p.path), rating: edits().rating(p.path) })));
+ipcMain.handle('clear-recent', () => { settings().set({ recent: [] }); return true; });
+
 ipcMain.handle('add-folder', async (e, given, mode) => {
+  // Dropped items: loose photos go to Recent photos; a dropped folder opens as a folder.
+  if (Array.isArray(given)) {
+    const paths = given.map(String);
+    const dirs = [], files = [];
+    for (const p of paths) { try { ((await fsp.stat(p)).isDirectory() ? dirs : files).push(p); } catch { /* gone */ } }
+    if (files.length) { const ok = await addRecent(files); return ok.length ? { recent: true, select: ok.map((p) => path.basename(p)) } : null; }
+    given = dirs[0];
+    if (!given) return null;
+  }
   let dir = given, select = [];
   if (!dir) {
     const files = mode === 'files' || IS_MAC;
@@ -135,7 +155,7 @@ ipcMain.handle('add-folder', async (e, given, mode) => {
     });
     if (r.canceled || !r.filePaths[0]) return null;
     dir = r.filePaths[0];
-    select = r.filePaths.map((p) => path.basename(p));
+    try { if (!(await fsp.stat(dir)).isDirectory()) { const ok = await addRecent(r.filePaths); return ok.length ? { recent: true, select: ok.map((p) => path.basename(p)) } : null; } } catch { return null; }
   }
   try { if (!(await fsp.stat(dir)).isDirectory()) dir = path.dirname(dir); else select = []; } catch { return null; }
   const list = [dir, ...folders().filter((f) => f !== dir)].slice(0, 30);

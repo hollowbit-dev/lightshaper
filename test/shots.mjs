@@ -19,7 +19,7 @@ await page.waitForSelector('#grid .tile img.ok', { timeout: 20000 });
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/02-library.png` });
 const pick = process.env.PHOTO || 'nikon.NEF';
-await page.dblclick(`#grid .tile:has-text("${pick}")`);
+await page.click(`#grid .tile:has-text("${pick}")`);
 const t0 = Date.now();
 for (let i = 0; i < 300 && !(await page.evaluate(() => window.__ls.st.loaded && document.querySelector('#busy').hidden)); i++) await page.waitForTimeout(100);
 console.log('opened in', Date.now() - t0, 'ms');

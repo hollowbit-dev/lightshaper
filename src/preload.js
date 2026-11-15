@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('ls', {
   platform: process.platform,
   folders: () => ipcRenderer.invoke('folders'),
   addFolder: (p, mode) => ipcRenderer.invoke('add-folder', p, mode),
+  recent: () => ipcRenderer.invoke('recent'),
+  clearRecent: () => ipcRenderer.invoke('clear-recent'),
   removeFolder: (p) => ipcRenderer.invoke('remove-folder', p),
   list: (dir) => ipcRenderer.invoke('list', dir),
   reveal: (id) => ipcRenderer.invoke('reveal', id),

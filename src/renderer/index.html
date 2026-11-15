@@ -26,7 +26,7 @@
   <!-- LIBRARY -->
   <section class="view on" id="library">
     <aside class="side">
-      <div class="side-h">Folders</div>
+      <div class="side-h">Your photos</div>
       <div id="folders" class="folders"></div>
       <button class="add-folder" id="addFolder"><span>+</span> Open photos or a folder</button>
       <div class="side-note"><svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M8 1 2.5 3v4.2c0 3.4 2.3 6.4 5.5 7.8 3.2-1.4 5.5-4.4 5.5-7.8V3L8 1Zm-1 10L4.5 8.5l1-1L7 9l3.5-3.5 1 1L7 11Z"/></svg> Your originals are never changed. Edits are kept by Lightshaper and saved as new copies when you export.</div>
@@ -34,8 +34,11 @@
     <div class="lib-main">
       <div class="lib-bar" id="libBar" hidden>
         <div class="lib-title"><b id="folderName"></b><span class="muted" id="photoCount"></span><select id="filter" class="filter" aria-label="Show"><option value="all">All photos</option><option value="1">★ 1 and up</option><option value="2">★ 2 and up</option><option value="3">★ 3 and up</option><option value="4">★ 4 and up</option><option value="5">★ 5</option><option value="edited">Edited</option></select></div>
-        <div class="lib-actions" id="selActions">
+        <span class="lib-hint muted" id="libHint">Click a photo to edit it. Tick ◯ to select several for batch edits.</span>
+        <div class="lib-actions" id="selActions" hidden>
           <span class="sel-count" id="selCount"></span>
+          <button class="ghost sm" id="selectAll">Select all</button>
+          <button class="ghost sm" id="selectNone">Done</button>
           <button class="ghost sm" id="copyEdits" title="Copy edits (⌘C)">Copy edits</button>
           <button class="ghost sm" id="pasteEdits" title="Paste edits (⌘V)" disabled>Paste edits</button>
           <div class="menu-wrap"><button class="ghost sm" id="lookMenuBtn">Apply look ▾</button><div class="menu" id="lookMenu" hidden></div></div>

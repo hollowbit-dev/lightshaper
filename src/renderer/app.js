@@ -56,12 +56,30 @@ function movePill() {
   if (!on) return;
   pill.style.width = on.offsetWidth + 'px'; pill.style.transform = `translateX(${on.offsetLeft}px)`;
 }
-$$('#modes button').forEach((b) => (b.onclick = () => { if (b.dataset.mode === 'edit' && !st.active) return; if (b.dataset.mode === 'edit' && st.mode !== 'edit') openEditor(st.active); else setMode(b.dataset.mode); }));
+// Edit opens the last photo you edited, or the selected one, or the first one.
+function editTarget() {
+  if (st.active && st.byId.has(st.active)) return st.active;
+  const [first] = st.sel; if (first) return first;
+  return st.photos[0] && st.photos[0].id;
+}
+$$('#modes button').forEach((b) => (b.onclick = () => {
+  if (b.dataset.mode === 'edit') { if (st.mode !== 'edit') { const id = editTarget(); if (id) openEditor(id); } return; }
+  setMode(b.dataset.mode);
+}));
 
 // ---------- folders + library ----------
+const RECENT = ':recent';
 async function loadFolders(open) {
   st.folders = await api.folders();
+  st.recentCount = (await api.recent()).length;
   const box = $('#folders'); box.innerHTML = '';
+  if (st.recentCount) {
+    const b = document.createElement('button');
+    b.className = 'folder recent' + (st.folder === RECENT ? ' on' : ''); b.title = RECENT;
+    b.innerHTML = `<svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M2.5 3h11c.6 0 1 .4 1 1v8c0 .6-.4 1-1 1h-11c-.6 0-1-.4-1-1V4c0-.6.4-1 1-1Zm1 8h9l-3-4-2.2 2.8L5.8 8z"/></svg><span>Recent photos</span><small>${st.recentCount}</small><i class="x" title="Clear this list (the photos stay where they are)">×</i>`;
+    b.onclick = async (e) => { if (e.target.classList.contains('x')) { await api.clearRecent(); if (st.folder === RECENT) st.folder = null; loadFolders(st.folder ? null : true); return; } openFolder(RECENT); };
+    box.append(b);
+  }
   for (const f of st.folders) {
     const b = document.createElement('button');
     b.className = 'folder' + (st.folder === f.path ? ' on' : '');
@@ -70,8 +88,12 @@ async function loadFolders(open) {
     b.onclick = (e) => { if (e.target.classList.contains('x')) { removeFolder(f.path); return; } openFolder(f.path); };
     box.append(b);
   }
-  if (open && st.folders.length) openFolder(open === true ? st.folders[0].path : open);
-  if (!st.folders.length) { st.folder = null; st.photos = []; renderGrid(); }
+  if (open) {
+    const last = st.prefs.lastPlace;
+    const target = open !== true ? open : last === RECENT && st.recentCount ? RECENT : st.folders.find((f) => f.path === last) ? last : st.folders[0] ? st.folders[0].path : st.recentCount ? RECENT : null;
+    if (target) await openFolder(target);
+  }
+  if (!st.folders.length && !st.recentCount) { st.folder = null; st.photos = []; renderGrid(); }
 }
 async function removeFolder(p) {
   await api.removeFolder(p);
@@ -81,18 +103,16 @@ async function removeFolder(p) {
 async function addFolder(p, mode) {
   const f = await api.addFolder(p, mode);
   if (!f) return;
-  await loadFolders(); await openFolder(f.path);
-  // Picked photos (not a folder): select them, and open straight into the editor if it's one.
+  await loadFolders(); await openFolder(f.recent ? RECENT : f.path);
+  // Picked photos (not a folder): go straight into the editor with the first one.
   const picked = st.photos.filter((x) => (f.select || []).includes(x.name));
-  if (picked.length) {
-    st.sel = new Set(picked.map((x) => x.id)); st.anchor = picked[0].id; updateSel();
-    if (picked.length === 1) openEditor(picked[0].id);
-  }
+  if (picked.length) openEditor(picked[0].id);
 }
 async function openFolder(p) {
   st.folder = p;
   $$('.folder').forEach((b) => b.classList.toggle('on', b.title === p));
-  const list = await api.list(p);
+  api.setSettings({ lastPlace: p }); st.prefs.lastPlace = p;
+  const list = p === RECENT ? await api.recent() : await api.list(p);
   st.photos = list; st.byId = new Map(list.map((x) => [x.id, x]));
   st.sel.clear(); st.anchor = null;
   if (st.mode === 'edit') setMode('library');
@@ -101,7 +121,7 @@ async function openFolder(p) {
 
 function thumbUrl(p) { return `ls://thumb/${p.id}?v=${p.v || 0}`; }
 function tileHtml(p) {
-  return `<img loading="lazy" decoding="async" src="${thumbUrl(p)}" alt=""><div class="badges">${p.kind === 'raw' ? `<span class="badge">${esc(p.ext)}</span>` : ''}${p.edited ? '<span class="badge ed">EDITED</span>' : ''}</div><div class="nm">${esc(p.name)}</div>${p.rating ? `<div class="stars">${'★'.repeat(p.rating)}</div>` : ''}${st.dirty.has(p.id) ? '<i class="work-dot"></i>' : ''}`;
+  return `<img loading="lazy" decoding="async" src="${thumbUrl(p)}" alt=""><div class="badges">${p.kind === 'raw' ? `<span class="badge">${esc(p.ext)}</span>` : ''}${p.edited ? '<span class="badge ed">EDITED</span>' : ''}</div><div class="nm">${esc(p.name)}</div><button class="tick" title="Select" aria-label="Select ${esc(p.name)}"></button>${p.rating ? `<div class="stars">${'★'.repeat(p.rating)}</div>` : ''}${st.dirty.has(p.id) ? '<i class="work-dot"></i>' : ''}`;
 }
 function makeTile(p, small) {
   const t = document.createElement('div');
@@ -121,7 +141,7 @@ function renderGrid() {
   $('#empty').hidden = has;
   $('#libBar').hidden = !has;
   if (!has) { grid.innerHTML = ''; $('#empty').hidden = false; updateSel(); return; }
-  $('#folderName').textContent = st.folders.find((f) => f.path === st.folder)?.name || '';
+  $('#folderName').textContent = st.folder === RECENT ? 'Recent photos' : st.folders.find((f) => f.path === st.folder)?.name || '';
   $('#photoCount').textContent = st.photos.length ? `${st.photos.length} photo${st.photos.length === 1 ? '' : 's'}` : 'No photos in this folder';
   const frag = document.createDocumentFragment();
   for (const p of shown()) frag.append(makeTile(p));
@@ -156,7 +176,12 @@ function fallbackThumb(p) {
 function updateSel() {
   for (const t of $$('#grid .tile')) t.classList.toggle('sel', st.sel.has(t.dataset.id));
   const n = st.sel.size;
+  $('#grid').classList.toggle('selecting', n > 0);
   $('#selCount').textContent = n ? `${n} selected` : '';
+  $('#libHint').hidden = n > 0 || !st.photos.length;
+  $('#selActions').hidden = n === 0;
+  $('#selectAll').hidden = n === 0 || n === st.photos.length;
+  $('#editTab').disabled = !st.photos.length && !st.active;
   $('#copyEdits').disabled = n !== 1;
   $('#pasteEdits').disabled = !st.clip || !n;
   $('#resetSel').disabled = !n;
@@ -168,11 +193,16 @@ function updateExportBtn() {
   const b = $('#exportBtn'); b.disabled = !n;
   b.textContent = st.mode === 'library' && n > 1 ? `Export ${n}` : 'Export';
 }
+// Click a photo to edit it. Tick its circle (or Cmd/Ctrl/Shift-click) to select several; while
+// anything is selected, clicks select instead of opening.
 $('#grid').addEventListener('click', (e) => {
   const t = e.target.closest('.tile');
   if (!t) { st.sel.clear(); updateSel(); return; }
   const id = t.dataset.id;
-  if (e.shiftKey && st.anchor) {
+  const selecting = e.target.closest('.tick') || st.sel.size || e.shiftKey || e.metaKey || e.ctrlKey;
+  if (!selecting) { openEditor(id); return; }
+  if (e.target.closest('.tick') || (st.sel.size && !e.shiftKey)) { st.sel.has(id) ? st.sel.delete(id) : st.sel.add(id); st.anchor = id; }
+  else if (e.shiftKey && st.anchor) {
     const ids = st.photos.map((p) => p.id); const a = ids.indexOf(st.anchor), b = ids.indexOf(id);
     if (!(e.metaKey || e.ctrlKey)) st.sel.clear();
     for (let i = Math.min(a, b); i <= Math.max(a, b); i++) st.sel.add(ids[i]);
@@ -180,7 +210,9 @@ $('#grid').addEventListener('click', (e) => {
   else { st.sel.clear(); st.sel.add(id); st.anchor = id; }
   updateSel();
 });
-$('#grid').addEventListener('dblclick', (e) => { const t = e.target.closest('.tile'); if (t) openEditor(t.dataset.id); });
+$('#grid').addEventListener('dblclick', (e) => { const t = e.target.closest('.tile'); if (t && !e.target.closest('.tick')) openEditor(t.dataset.id); });
+$('#selectAll').onclick = () => { st.photos.forEach((p) => st.sel.add(p.id)); updateSel(); };
+$('#selectNone').onclick = () => { st.sel.clear(); updateSel(); };
 $('#thumbSize').oninput = (e) => { $('#grid').style.setProperty('--tile', e.target.value + 'px'); };
 $('#thumbSize').onchange = (e) => api.setSettings({ thumbSize: +e.target.value });
 $('#addFolder').onclick = () => addFolder();
@@ -950,12 +982,8 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault(); dragDepth = 0; $('#dropping').hidden = true;
   const presetFiles = [...e.dataTransfer.files].filter((x) => /\.(xmp|lrtemplate)$/i.test(x.name));
   if (presetFiles.length) { importPresets(await api.readPresets(presetFiles.map((x) => api.pathOf(x)))); return; }
-  const f = e.dataTransfer.files[0]; if (!f) return;
-  const p = api.pathOf(f); if (!p) return;
-  const name = f.name;
-  await addFolder(p);
-  const hit = st.photos.find((x) => x.name === name);
-  if (hit) { st.sel.clear(); st.sel.add(hit.id); updateSel(); openEditor(hit.id); }
+  const paths = [...e.dataTransfer.files].map((f) => api.pathOf(f)).filter(Boolean);
+  if (paths.length) await addFolder(paths);
 });
 
 // ---------- keyboard ----------
