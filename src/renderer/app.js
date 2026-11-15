@@ -1,6 +1,7 @@
 // Lightshaper window: the Library (folders and photos) and the Editor (live preview, sliders, looks, crop).
 import { Engine, frameSize, outToSrc, curveLUT, M } from './engine.js';
 import { buildExif, insertExif } from './exif.js';
+import { encodeTiff } from './tiff-write.js';
 import { measure, matchSettings, blend } from './match.js';
 import { parsePreset } from './presets.js';
 import { decode } from './decode.js';
@@ -77,9 +78,16 @@ async function removeFolder(p) {
   if (st.folder === p) st.folder = null;
   loadFolders(st.folder ? null : true);
 }
-async function addFolder(p) {
-  const f = await api.addFolder(p);
-  if (f) { await loadFolders(); openFolder(f.path); }
+async function addFolder(p, mode) {
+  const f = await api.addFolder(p, mode);
+  if (!f) return;
+  await loadFolders(); await openFolder(f.path);
+  // Picked photos (not a folder): select them, and open straight into the editor if it's one.
+  const picked = st.photos.filter((x) => (f.select || []).includes(x.name));
+  if (picked.length) {
+    st.sel = new Set(picked.map((x) => x.id)); st.anchor = picked[0].id; updateSel();
+    if (picked.length === 1) openEditor(picked[0].id);
+  }
 }
 async function openFolder(p) {
   st.folder = p;
@@ -176,7 +184,10 @@ $('#grid').addEventListener('dblclick', (e) => { const t = e.target.closest('.ti
 $('#thumbSize').oninput = (e) => { $('#grid').style.setProperty('--tile', e.target.value + 'px'); };
 $('#thumbSize').onchange = (e) => api.setSettings({ thumbSize: +e.target.value });
 $('#addFolder').onclick = () => addFolder();
-$('#openFirst').onclick = () => addFolder();
+$('#openFirst').onclick = () => addFolder(null, 'files');
+$('#openFolderWin').onclick = () => addFolder();
+if (api.platform === 'darwin') { $('#openFolderWin').hidden = true; }
+else { $('#openFirst').textContent = 'Open photos'; $('#addFolder').innerHTML = '<span>+</span> Add a folder'; }
 
 // copy / paste / looks / reset for the selection
 function copyEdits(id) {
@@ -822,7 +833,7 @@ $('#cropBox').addEventListener('pointermove', (e) => {
 $('#cropBox').addEventListener('pointerup', () => { cd = null; });
 
 // ---------- export ----------
-const ex = { format: 'jpg', quality: 92, size: 0, where: ':beside', dir: null, exif: true };
+const ex = { format: 'jpg', quality: 92, size: 0, where: ':beside', dir: null, exif: true, bits: 8 };
 function exportIds() {
   if (st.mode === 'edit') return st.active ? [st.active] : [];
   return st.sel.size ? st.photos.filter((p) => st.sel.has(p.id)).map((p) => p.id) : st.photos.map((p) => p.id);
@@ -836,17 +847,19 @@ function openExport() {
   const seg = (id, v) => $$(`#${id} button`).forEach((b) => b.classList.toggle('on', b.dataset.v === String(v)));
   seg('exFormat', ex.format); seg('exSize', ex.size); seg('exWhere', ex.where === ':beside' ? ':beside' : 'pick');
   $('#exQuality').value = ex.quality; $('#exQualityV').textContent = ex.quality;
-  $('#exQualityRow').hidden = ex.format === 'png';
+  $('#exQualityRow').hidden = ex.format === 'png' || ex.format === 'tif';
+  $('#exBitsRow').hidden = ex.format !== 'tif'; seg('exBits', ex.bits || 8);
   $('#exExif').checked = ex.exif !== false; $('#exExifRow').hidden = ex.format !== 'jpg';
   $('#exWhereNote').textContent = ex.where === ':beside' ? 'In a new “Lightshaper edits” folder' : ex.dir || '';
   $('#exProgress').hidden = true; $('#exGo').disabled = false;
   $('#exportSheet').hidden = false;
 }
 $('#exportBtn').onclick = openExport;
-for (const id of ['exFormat', 'exSize']) {
+for (const id of ['exFormat', 'exSize', 'exBits']) {
   $$(`#${id} button`).forEach((b) => (b.onclick = () => {
     $$(`#${id} button`).forEach((x) => x.classList.toggle('on', x === b));
-    if (id === 'exFormat') { ex.format = b.dataset.v; $('#exQualityRow').hidden = ex.format === 'png'; $('#exExifRow').hidden = ex.format !== 'jpg'; } else ex.size = +b.dataset.v;
+    if (id === 'exFormat') { ex.format = b.dataset.v; $('#exQualityRow').hidden = ex.format === 'png' || ex.format === 'tif'; $('#exExifRow').hidden = ex.format !== 'jpg'; $('#exBitsRow').hidden = ex.format !== 'tif'; }
+    else if (id === 'exBits') ex.bits = +b.dataset.v; else ex.size = +b.dataset.v;
   }));
 }
 $$('#exWhere button').forEach((b) => (b.onclick = async () => {
@@ -876,11 +889,20 @@ $('#exGo').onclick = async () => {
       const s = S.complete(id === st.active && st.s ? st.s : await api.getEdit(id));
       const src = await decode(p);
       worker.load(src); if (src.ref) { worker.calibrate(src.ref); src.ref.close(); } if (src.bitmap) src.bitmap.close();
-      const img = await worker.exportImage(s, ex.size);
-      const c = new OffscreenCanvas(img.width, img.height); c.getContext('2d').putImageData(img, 0, 0);
-      const type = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[ex.format];
-      const blob = await c.convertToBlob({ type, quality: ex.quality / 100 });
-      let bytes = await blob.arrayBuffer();
+      let bytes;
+      if (ex.format === 'tif') {
+        if (ex.bits === 16) { const r = await worker.exportImage16(s, ex.size); bytes = await encodeTiff(r.data, r.width, r.height); }
+        else {
+          const img = await worker.exportImage(s, ex.size), rgb = new Uint8Array(img.width * img.height * 3);
+          for (let i = 0, j = 0; i < img.data.length; i += 4, j += 3) { rgb[j] = img.data[i]; rgb[j + 1] = img.data[i + 1]; rgb[j + 2] = img.data[i + 2]; }
+          bytes = await encodeTiff(rgb, img.width, img.height);
+        }
+      } else {
+        const img = await worker.exportImage(s, ex.size);
+        const c = new OffscreenCanvas(img.width, img.height); c.getContext('2d').putImageData(img, 0, 0);
+        const type = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[ex.format];
+        bytes = await (await c.convertToBlob({ type, quality: ex.quality / 100 })).arrayBuffer();
+      }
       if (ex.format === 'jpg' && ex.exif !== false) { try { bytes = insertExif(bytes, buildExif((src.meta && src.meta.exif) || {})); } catch { /* write without it */ } }
       const r = await api.exportWrite(id, dir, ex.format, bytes);
       if (!r.ok) throw new Error(r.error);

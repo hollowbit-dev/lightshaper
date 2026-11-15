@@ -28,7 +28,7 @@
     <aside class="side">
       <div class="side-h">Folders</div>
       <div id="folders" class="folders"></div>
-      <button class="add-folder" id="addFolder"><span>+</span> Add a folder</button>
+      <button class="add-folder" id="addFolder"><span>+</span> Open photos or a folder</button>
       <div class="side-note"><svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M8 1 2.5 3v4.2c0 3.4 2.3 6.4 5.5 7.8 3.2-1.4 5.5-4.4 5.5-7.8V3L8 1Zm-1 10L4.5 8.5l1-1L7 9l3.5-3.5 1 1L7 11Z"/></svg> Your originals are never changed. Edits are kept by Lightshaper and saved as new copies when you export.</div>
     </aside>
     <div class="lib-main">
@@ -48,8 +48,8 @@
         <div class="drop">
           <div class="drop-art" aria-hidden="true"><i></i><i></i><i></i></div>
           <h1>Edit your photos, beautifully. For free.</h1>
-          <p>Open a folder of photos (JPEG, PNG, HEIC or camera RAW) to get started. Or drop a folder here.</p>
-          <button class="primary lg" id="openFirst">Open a folder</button>
+          <p>Open photos or a whole folder: JPEG, PNG, HEIC, TIFF, WebP, AVIF, JPEG XL, PSD and camera RAW. Or drop them here.</p>
+          <div class="open-row"><button class="primary lg" id="openFirst">Open photos or a folder</button><button class="ghost lg" id="openFolderWin">Open a folder</button></div>
           <div class="promises"><span>No account</span><span>Works offline</span><span>Originals never changed</span></div>
         </div>
       </div>
@@ -139,7 +139,8 @@
     <h2 id="exTitle">Export</h2>
     <p class="muted" id="exSub"></p>
     <label class="row"><span>Format</span>
-      <div class="mini-seg" id="exFormat"><button data-v="jpg" class="on">JPEG</button><button data-v="png">PNG</button><button data-v="webp">WebP</button></div></label>
+      <div class="mini-seg" id="exFormat"><button data-v="jpg" class="on">JPEG</button><button data-v="png">PNG</button><button data-v="webp">WebP</button><button data-v="tif">TIFF</button></div></label>
+    <label class="row" id="exBitsRow" hidden><span>Depth</span><div class="mini-seg" id="exBits"><button data-v="8" class="on">8-bit</button><button data-v="16">16-bit</button></div></label>
     <label class="row" id="exQualityRow"><span>Quality</span><input type="range" id="exQuality" min="50" max="100" value="92"><b class="num" id="exQualityV">92</b></label>
     <label class="row"><span>Size</span>
       <div class="mini-seg" id="exSize"><button data-v="0" class="on">Full</button><button data-v="4096">4096</button><button data-v="2048">2048</button><button data-v="1080">1080</button></div></label>
@@ -168,7 +169,7 @@
     <p class="muted" id="versionLine"></p>
     <label class="switch-row"><span>Check for updates once a day<small class="muted">Only asks GitHub for the latest version number. Nothing about you or your photos is sent.</small></span><input type="checkbox" id="autoUpdate"></label>
     <div class="sheet-actions"><button class="ghost" id="checkNow">Check now</button><button class="primary" id="settingsDone">Done</button></div>
-    <p class="fine">Free and open source. Made by <a href="https://hollowbit.dev/">Hollowbit Studio</a>. RAW decoding by LibRaw.</p>
+    <p class="fine">Free and open source. Made by <a href="https://hollowbit.dev/">Hollowbit Studio</a>. RAW by LibRaw, HEIC by libheif, JPEG XL by libjxl (jSquash), TIFF by UTIF, PSD by ag-psd.</p>
   </div>
 </div>
 

@@ -2,7 +2,8 @@
 
 A free, offline photo editor for Mac and Windows, by [Hollowbit Studio](https://hollowbit.dev/).
 
-- Open a folder of photos: JPEG, PNG, WebP, HEIC (Mac) and camera RAW (CR2, CR3, NEF, ARW, RAF, DNG, ORF, RW2 and more, via LibRaw).
+- Open photos or whole folders: JPEG, PNG, WebP, AVIF, HEIC/HEIF, TIFF (8 and 16-bit), JPEG XL, PSD, BMP, GIF and camera RAW (CR2, CR3, NEF, ARW, RAF, DNG, ORF, RW2, PEF, GPR and more, via LibRaw).
+- Export to JPEG, PNG, WebP or TIFF (8 or 16-bit).
 - Light, colour and effects sliders, tone curve, colour mixer, colour grading, noise reduction, crop and straighten.
 - Gradient and radial masks, white balance picker, clipping warning, star ratings.
 - 14 hand-made looks, your own looks, and **Match a photo**: copy another photo's tones and colours into ordinary sliders.
@@ -17,4 +18,4 @@ npm test           # engine renders + UI walkthrough (needs sample photos in sam
 npm run dist       # installers in dist/
 ```
 
-MIT licence. RAW decoding by [LibRaw](https://www.libraw.org/) (LGPL/CDDL) through libraw-wasm.
+MIT licence. Decoders: [LibRaw](https://www.libraw.org/) (LGPL/CDDL) through libraw-wasm, [libheif](https://github.com/strukturag/libheif) (LGPL) through libheif-js, libjxl through [jSquash](https://github.com/jamsinclair/jSquash) (Apache-2.0), [UTIF.js](https://github.com/photopea/UTIF.js) (MIT) and [ag-psd](https://github.com/Agamnentzar/ag-psd) (MIT). `npm run vendor` rebuilds their bundles in src/renderer/vendor.

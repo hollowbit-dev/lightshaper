@@ -6,7 +6,6 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
-const os = require('os');
 const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 const { setupUpdates } = require('./update-check');
@@ -42,12 +41,6 @@ async function serve(req) {
   if (u.host === 'photo') {
     const p = allowed.get(rel.slice(1));
     if (!p) return new Response('no', { status: 404 });
-    // Chromium can't open HEIC, so on a Mac the system converts a copy first. The original isn't touched.
-    if (/\.(heic|heif)$/i.test(p)) {
-      const tmp = await heicCopy(p);
-      if (tmp) return net.fetch(pathToFileURL(tmp).toString());
-      return new Response('no', { status: 415 });
-    }
     return net.fetch(pathToFileURL(p).toString());
   }
   if (u.host === 'thumb') {
@@ -59,15 +52,6 @@ async function serve(req) {
     return net.fetch(pathToFileURL(file).toString(), { headers: { 'Cache-Control': 'no-cache' } });
   }
   return new Response('no', { status: 404 });
-}
-
-async function heicCopy(p) {
-  if (!IS_MAC) return null;
-  const st = await fsp.stat(p);
-  const out = path.join(os.tmpdir(), 'lightshaper-heic', `${idOf(p)}-${st.mtimeMs | 0}.jpg`);
-  if (fs.existsSync(out)) return out;
-  await fsp.mkdir(path.dirname(out), { recursive: true });
-  return new Promise((res) => execFile('/usr/bin/sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '100', p, '--out', out], (err) => res(err ? null : out)));
 }
 
 // Thumbnails: an edited photo's own preview (saved by the editor), otherwise the system's thumbnail.
@@ -137,24 +121,33 @@ async function listing(dir) {
 }
 
 ipcMain.handle('folders', () => folders().map((f) => ({ path: f, name: path.basename(f) })));
-ipcMain.handle('add-folder', async (e, given) => {
-  let dir = given;
+// Opens photos or a folder. On a Mac one window can pick either; Windows can't mix them, so
+// `mode` 'files' asks for photos and anything else asks for a folder.
+const PHOTO_EXT = () => [...lib.IMG, ...Object.keys(lib.EXTRA), ...lib.RAW];
+ipcMain.handle('add-folder', async (e, given, mode) => {
+  let dir = given, select = [];
   if (!dir) {
-    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Open a folder of photos', buttonLabel: 'Open' });
+    const files = mode === 'files' || IS_MAC;
+    const r = await dialog.showOpenDialog(win, {
+      properties: IS_MAC ? ['openFile', 'openDirectory', 'multiSelections'] : files ? ['openFile', 'multiSelections'] : ['openDirectory'],
+      title: files ? 'Open photos or a folder' : 'Open a folder of photos', buttonLabel: 'Open',
+      ...(files ? { filters: [{ name: 'Photos', extensions: PHOTO_EXT() }, { name: 'All files', extensions: ['*'] }] } : {}),
+    });
     if (r.canceled || !r.filePaths[0]) return null;
     dir = r.filePaths[0];
+    select = r.filePaths.map((p) => path.basename(p));
   }
-  try { if (!(await fsp.stat(dir)).isDirectory()) dir = path.dirname(dir); } catch { return null; }
+  try { if (!(await fsp.stat(dir)).isDirectory()) dir = path.dirname(dir); else select = []; } catch { return null; }
   const list = [dir, ...folders().filter((f) => f !== dir)].slice(0, 30);
   settings().set({ folders: list });
-  return { path: dir, name: path.basename(dir) };
+  return { path: dir, name: path.basename(dir), select };
 });
 ipcMain.handle('remove-folder', (e, dir) => { settings().set({ folders: folders().filter((f) => f !== dir) }); return true; });
 ipcMain.handle('list', (e, dir) => (folders().includes(dir) ? listing(dir) : []));
 // A single reference photo from anywhere (for "Match a photo"). Only that file becomes readable.
 ipcMain.handle('pick-image', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile'], title: 'Choose a photo to match', buttonLabel: 'Match this',
-    filters: [{ name: 'Photos', extensions: ['jpg', 'jpeg', 'png', 'webp', 'avif', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'arw', 'raf', 'orf', 'rw2', 'pef', 'srw'] }] });
+    filters: [{ name: 'Photos', extensions: [...lib.IMG, ...Object.keys(lib.EXTRA), ...lib.RAW] }] });
   if (r.canceled || !r.filePaths[0]) return null;
   const p = r.filePaths[0], k = lib.kind(path.basename(p));
   if (!k) return null;
@@ -207,7 +200,7 @@ const exportDirs = new Set();
 const savedDir = () => { const d = (settings().get().export || {}).dir; return d && d !== ':beside' ? d : null; };
 ipcMain.handle('export-write', async (e, id, dir, ext, bytes) => {
   const src = allowed.get(id);
-  if (!src || !dir || !/^(jpg|png|webp)$/.test(ext)) return { ok: false, error: 'bad request' };
+  if (!src || !dir || !/^(jpg|png|webp|tif)$/.test(ext)) return { ok: false, error: 'bad request' };
   if (dir === ':beside') dir = path.join(path.dirname(src), 'Lightshaper edits');
   else if (!exportDirs.has(dir) && dir !== savedDir()) return { ok: false, error: 'Pick the folder again' };
   await fsp.mkdir(dir, { recursive: true });

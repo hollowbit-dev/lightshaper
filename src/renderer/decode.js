@@ -7,12 +7,33 @@ const RAW_OPTS = {
   outputBps: 16, gamm: [1, 1], noAutoBright: true, useCameraWb: true, outputColor: 1, userQual: 3, highlight: 2,
 };
 
+// TIFF, HEIC, JPEG XL and PSD are decoded in a background worker.
+const OWN = ['tiff', 'heic', 'jxl', 'psd'];
+let fw = null, fwId = 0;
+const fwJobs = new Map();
+function formatsWorker() {
+  if (!fw) {
+    fw = new Worker(new URL('./formats.js', import.meta.url), { type: 'module' });
+    fw.onmessage = ({ data }) => { const j = fwJobs.get(data.id); if (!j) return; fwJobs.delete(data.id); data.ok ? j.res(data) : j.rej(new Error(data.error)); };
+    fw.onerror = (e) => { for (const j of fwJobs.values()) j.rej(new Error(e.message || 'Decoder crashed')); fwJobs.clear(); fw = null; };
+  }
+  return fw;
+}
+function decodeOwn(kind, buf) {
+  const id = ++fwId;
+  return new Promise((res, rej) => { fwJobs.set(id, { res, rej }); formatsWorker().postMessage({ id, kind, buf }, [buf]); });
+}
+
 export async function decode(photo, { half = false } = {}) {
   const res = await fetch(`ls://photo/${photo.id}`);
-  if (!res.ok) throw new Error(res.status === 415 ? 'This kind of file can only be opened on a Mac.' : 'The file could not be read.');
+  if (!res.ok) throw new Error('The file could not be read.');
+  if (OWN.includes(photo.kind)) {
+    const r = await decodeOwn(photo.kind, await res.arrayBuffer());
+    return { kind: r.layout, width: r.width, height: r.height, data: r.data, meta: { exif: r.exif || {} } };
+  }
   if (photo.kind !== 'raw') {
     const buf = await res.arrayBuffer();
-    const exif = photo.kind === 'jpg' || photo.kind === 'heic' || photo.kind === 'heif' ? readJpegExif(buf) : {};
+    const exif = photo.kind === 'jpg' ? readJpegExif(buf) : {};
     const bitmap = await createImageBitmap(new Blob([buf]), { imageOrientation: 'from-image', colorSpaceConversion: 'default', premultiplyAlpha: 'none' });
     return { kind: 'bitmap', bitmap, meta: { exif } };
   }

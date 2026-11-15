@@ -2,14 +2,18 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const RAW = ['cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'raf', 'orf', 'rw2', 'pef', 'dng', 'srw', 'raw', 'rwl', '3fr', 'erf', 'kdc', 'mrw', 'x3f', 'iiq', 'mef', 'mos'];
-const IMG = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'gif'];
-const HEIC = process.platform === 'darwin' ? ['heic', 'heif'] : [];
+// Camera RAW (decoded by LibRaw).
+const RAW = ['cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'raf', 'orf', 'ori', 'rw2', 'rwl', 'pef', 'ptx', 'dng', 'srw', 'raw', '3fr', 'fff', 'erf', 'kdc', 'dcr', 'k25', 'mrw', 'mdc', 'x3f', 'iiq', 'cap', 'eip', 'mef', 'mos', 'gpr', 'ari', 'bay', 'rwz'];
+// Opened by the browser engine.
+const IMG = ['jpg', 'jpeg', 'jpe', 'jfif', 'png', 'apng', 'webp', 'avif', 'bmp', 'gif', 'ico'];
+// Opened by Lightshaper's own decoders (renderer/formats.js).
+const EXTRA = { tif: 'tiff', tiff: 'tiff', heic: 'heic', heif: 'heic', hif: 'heic', jxl: 'jxl', psd: 'psd', psb: 'psd' };
 
 function kind(name) {
   const ext = path.extname(name).slice(1).toLowerCase();
   if (RAW.includes(ext)) return 'raw';
-  if (IMG.includes(ext) || HEIC.includes(ext)) return ext === 'jpeg' ? 'jpg' : ext;
+  if (EXTRA[ext]) return EXTRA[ext];
+  if (IMG.includes(ext)) return ['jpeg', 'jpe', 'jfif'].includes(ext) ? 'jpg' : ext;
   return null;
 }
 
@@ -31,4 +35,4 @@ async function scan(dir) {
   return out.sort((a, b) => a.time - b.time || a.name.localeCompare(b.name));
 }
 
-module.exports = { scan, kind };
+module.exports = { scan, kind, RAW, IMG, EXTRA };

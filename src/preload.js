@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('ls', {
   platform: process.platform,
   folders: () => ipcRenderer.invoke('folders'),
-  addFolder: (p) => ipcRenderer.invoke('add-folder', p),
+  addFolder: (p, mode) => ipcRenderer.invoke('add-folder', p, mode),
   removeFolder: (p) => ipcRenderer.invoke('remove-folder', p),
   list: (dir) => ipcRenderer.invoke('list', dir),
   reveal: (id) => ipcRenderer.invoke('reveal', id),

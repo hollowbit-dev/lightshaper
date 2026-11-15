@@ -12,11 +12,12 @@ const FS_IMPORT_SRGB = `#version 300 es
 precision highp float; uniform sampler2D uSrc; in vec2 vUv; out vec4 o;
 void main() { o = vec4(texture(uSrc, vUv).rgb, 1.); }`; // SRGB8 texture: sampling is already linear. Row 0 = top of the photo.
 const FS_IMPORT_RAW = `#version 300 es
-precision highp float; precision highp usampler2D; uniform usampler2D uSrc; uniform float uScale; in vec2 vUv; out vec4 o;
+precision highp float; precision highp usampler2D; uniform usampler2D uSrc; uniform float uScale, uSrgb; in vec2 vUv; out vec4 o;
 void main() { ivec2 s = textureSize(uSrc, 0); ivec2 p = ivec2(vUv * vec2(s)); p = min(p, s - 1);
   // LibRaw hands back BT.709-gamma data (power .45, toe slope 4.5); undo it to get linear light.
   vec3 v = vec3(texelFetch(uSrc, p, 0).rgb) * uScale;
-  vec3 lin = mix(v / 4.5, pow((v + .099) / 1.099, vec3(1. / .45)), step(.081, v));
+  vec3 lin = uSrgb > .5 ? mix(v / 12.92, pow((v + .055) / 1.055, vec3(2.4)), step(.04045, v))
+                       : mix(v / 4.5, pow((v + .099) / 1.099, vec3(1. / .45)), step(.081, v));
   o = vec4(lin, 1.); }`;
 // Downsample (mip level) to the small working copy, then a separable blur.
 const FS_COPY = `#version 300 es
@@ -360,22 +361,27 @@ export class Engine {
     this.base = this.blur = null;
   }
 
-  // src: { kind: 'bitmap', bitmap } or { kind: 'raw', width, height, data: Uint16Array (RGB) }
+  // src: { kind: 'bitmap', bitmap }, { kind: 'raw' | 'rgb16', width, height, data: Uint16Array (RGB) }
+  // or { kind: 'rgba8', width, height, data: Uint8ClampedArray (RGBA, sRGB) }
   load(src) {
     const gl = this.gl;
     this.free();
     let w = src.kind === 'bitmap' ? src.bitmap.width : src.width, h = src.kind === 'bitmap' ? src.bitmap.height : src.height;
+    const eight = src.kind === 'bitmap' || src.kind === 'rgba8';
     const tmp = src.kind === 'bitmap'
       ? (() => { gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); return this.tex(w, h, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, src.bitmap); })()
-      : (() => { gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); return this.tex(w, h, gl.RGB16UI, gl.RGB_INTEGER, gl.UNSIGNED_SHORT, src.data, gl.NEAREST); })();
+      : src.kind === 'rgba8'
+        ? (() => { gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4); return this.tex(w, h, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(src.data.buffer, src.data.byteOffset, src.data.byteLength)); })()
+        : (() => { gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); return this.tex(w, h, gl.RGB16UI, gl.RGB_INTEGER, gl.UNSIGNED_SHORT, src.data, gl.NEAREST); })();
     // Photos bigger than the graphics card allows are scaled down to fit (rare: over 16384 pixels).
     const sc = Math.min(1, this.maxTex / Math.max(w, h));
     const bw = Math.round(w * sc), bh = Math.round(h * sc);
     this.base = this.tex(bw, bh, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, null, gl.LINEAR_MIPMAP_LINEAR);
     const f = this.fbo(this.base);
-    this.draw(src.kind === 'bitmap' ? this.progs.srgb : this.progs.raw, f, bw, bh, (u) => {
+    this.draw(eight ? this.progs.srgb : this.progs.raw, f, bw, bh, (u) => {
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tmp); gl.uniform1i(u.uSrc, 0);
       if (u.uScale) gl.uniform1f(u.uScale, (src.scale || 1) / 65535);
+      if (u.uSrgb) gl.uniform1f(u.uSrgb, src.kind === 'rgb16' ? 1 : 0);
     });
     gl.deleteFramebuffer(f); gl.deleteTexture(tmp);
     gl.bindTexture(gl.TEXTURE_2D, this.base); gl.generateMipmap(gl.TEXTURE_2D);
@@ -526,6 +532,37 @@ export class Engine {
       tmp.set(px.subarray(a, a + row)); px.copyWithin(a, b, b + row); px.set(tmp, b);
     }
     return px;
+  }
+
+  // Full-size render for 16-bit files: float tiles, returns { width, height, data: Uint16Array RGB }.
+  async exportImage16(s, maxLong = 0) {
+    let [w, h] = this.outSize(s);
+    if (maxLong && Math.max(w, h) > maxLong) { const k = maxLong / Math.max(w, h); w = Math.round(w * k); h = Math.round(h * k); }
+    const tile = 1024, gl = this.gl;
+    const out = new Uint16Array(w * h * 3);
+    const t = this.tex(tile, tile, gl.RGBA32F, gl.RGBA, gl.FLOAT, null, gl.NEAREST);
+    const f = this.fbo(t);
+    const buf = new Float32Array(tile * tile * 4);
+    for (let ty = 0; ty < h; ty += tile) {
+      for (let tx = 0; tx < w; tx += tile) {
+        const tw = Math.min(tile, w - tx), th = Math.min(tile, h - ty);
+        const toOut = M.mul(M.t(tx / w, (ty + th) / h), M.s(tw / w, -th / h));
+        this.render(s, { w: tw, h: th }, { target: f, toOut });
+        gl.readPixels(0, 0, tw, th, gl.RGBA, gl.FLOAT, buf);
+        for (let y = 0; y < th; y++) {
+          const src = (th - 1 - y) * tw * 4, dst = ((ty + y) * w + tx) * 3;
+          for (let x = 0; x < tw; x++) {
+            out[dst + x * 3] = Math.round(Math.min(1, Math.max(0, buf[src + x * 4])) * 65535);
+            out[dst + x * 3 + 1] = Math.round(Math.min(1, Math.max(0, buf[src + x * 4 + 1])) * 65535);
+            out[dst + x * 3 + 2] = Math.round(Math.min(1, Math.max(0, buf[src + x * 4 + 2])) * 65535);
+          }
+        }
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(f); gl.deleteTexture(t);
+    return { width: w, height: h, data: out };
   }
 
   // Full-size render in tiles (keeps memory and GPU time per step small), returns ImageData.
