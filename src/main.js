@@ -235,7 +235,7 @@ ipcMain.handle('export-write', async (e, id, dir, ext, bytes) => {
 const exported = new Set();
 ipcMain.handle('show-export', (e, p) => { if (exported.has(p) && fs.existsSync(p)) shell.showItemInFolder(p); return true; });
 
-app.whenReady().then(() => {
+app.whenReady().then(() => { require('./discord-menu').addDiscordMenu();
   protocol.handle('ls', serve);
   create();
   updates.schedule();
